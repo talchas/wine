@@ -2621,6 +2621,7 @@ struct wined3d_map_range
 struct wined3d_buffer
 {
     struct wined3d_resource resource;
+    BYTE *map_mem;
 
     struct wined3d_buffer_desc desc;
 
