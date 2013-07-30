@@ -1011,14 +1011,23 @@ HRESULT CDECL wined3d_buffer_map(struct wined3d_buffer *buffer, UINT offset, UIN
                 context_release(context);
             }
         }
+        else if(!wined3d_settings.cs_multithreaded)
+        {
+            if (flags & WINED3D_MAP_DISCARD)
+                buffer->flags |= WINED3D_BUFFER_DISCARD;
 
-        if (flags & WINED3D_MAP_DISCARD)
-            buffer->flags |= WINED3D_BUFFER_DISCARD;
-
-        if (!(flags & WINED3D_MAP_NOOVERWRITE))
-            buffer->flags &= ~WINED3D_BUFFER_NOSYNC;
-        else if (!buffer_is_dirty(buffer))
-            buffer->flags |= WINED3D_BUFFER_NOSYNC;
+            if (buffer_is_dirty(buffer))
+            {
+                if (buffer->flags & WINED3D_BUFFER_NOSYNC && !(flags & WINED3D_MAP_NOOVERWRITE))
+                {
+                    buffer->flags &= ~WINED3D_BUFFER_NOSYNC;
+                }
+            }
+            else if(flags & WINED3D_MAP_NOOVERWRITE)
+            {
+                buffer->flags |= WINED3D_BUFFER_NOSYNC;
+            }
+        }
     }
 
     if (wined3d_settings.cs_multithreaded && count == 1)
@@ -1331,4 +1340,11 @@ HRESULT CDECL wined3d_buffer_create_ib(struct wined3d_device *device, UINT size,
     *buffer = object;
 
     return WINED3D_OK;
+}
+
+void buffer_swap_mem(struct wined3d_buffer *buffer, BYTE *mem)
+{
+    wined3d_resource_free_sysmem(&buffer->resource);
+    buffer->resource.heap_memory = mem;
+    buffer->flags |= WINED3D_BUFFER_DISCARD;
 }
