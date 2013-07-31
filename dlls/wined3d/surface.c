@@ -1507,9 +1507,7 @@ static void surface_download_data(struct wined3d_surface *surface, const RECT *s
         checkGLcall("glBindBufferARB");
     }
 
-    if (wined3d_settings.cs_multithreaded)
-        gl_info->gl_ops.gl.p_glFinish();
-    else if (wined3d_settings.strict_draw_ordering)
+    if (wined3d_settings.strict_draw_ordering)
         gl_info->gl_ops.gl.p_glFlush();
 }
 
