@@ -2055,7 +2055,7 @@ struct wined3d_resource
     void *user_memory;
     void *dib_memory;
     BOOL unmap_dirtify;
-    struct wined3d_gl_bo *buffer;
+    struct wined3d_gl_bo *buffer, *map_buffer;
     UINT custom_row_pitch, custom_slice_pitch;
 
     void *parent;
