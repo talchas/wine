@@ -1159,37 +1159,6 @@ HRESULT CDECL wined3d_surface_get_render_target_data(struct wined3d_surface *sur
     return wined3d_surface_blt(surface, NULL, render_target, NULL, 0, NULL, WINED3D_TEXF_POINT);
 }
 
-static BOOL surface_init_sysmem(struct wined3d_surface *surface)
-{
-    if (surface->resource.allocatedMemory)
-    {
-        memset(surface->resource.allocatedMemory, 0, surface->resource.size);
-    }
-    else if (!surface->user_memory)
-    {
-        if (!surface->resource.heap_memory)
-        {
-            if (!wined3d_resource_allocate_sysmem(&surface->resource))
-            {
-                ERR("Failed to allocate system memory.\n");
-                return FALSE;
-            }
-        }
-        else if (!(surface->flags & SFLAG_CLIENT))
-        {
-            ERR("Surface %p has heap_memory %p and flags %#x.\n",
-                    surface, surface->resource.heap_memory, surface->flags);
-        }
-
-        surface->resource.allocatedMemory = surface->resource.heap_memory;
-    }
-
-    surface_validate_location(surface, SFLAG_INSYSMEM);
-    surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
-
-    return TRUE;
-}
-
 static void surface_unload(struct wined3d_resource *resource)
 {
     struct wined3d_surface *surface = surface_from_resource(resource);
@@ -1210,9 +1179,16 @@ static void surface_unload(struct wined3d_resource *resource)
          * Put the surfaces into sysmem, and reset the content. The D3D content is undefined,
          * but we can't set the sysmem INDRAWABLE because when we're rendering the swapchain
          * or the depth stencil into an FBO the texture or render buffer will be removed
-         * and all flags get lost
-         */
-        surface_init_sysmem(surface);
+         * and all flags get lost.
+         *
+         * TODO: Setting SFLAG_DISCARDED is be a better solution, but it only works for
+         * depth stencils so far. */
+
+        surface_prepare_system_memory(surface);
+        if (surface->resource.heap_memory)
+            memset(surface->resource.heap_memory, 0, surface->resource.size);
+        surface_validate_location(surface, SFLAG_INSYSMEM);
+        surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
 
         /* We also get here when the ddraw swapchain is destroyed, for example
          * for a mode switch. In this case this surface won't necessarily be
@@ -2814,10 +2790,15 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
             return hr;
         }
         surface->resource.allocatedMemory = surface->dib.bitmap_data;
-        surface->flags |= SFLAG_INSYSMEM;
     }
-    else if (!surface_init_sysmem(surface))
-        return E_OUTOFMEMORY;
+    else if (!surface->user_memory)
+    {
+        surface_prepare_system_memory(surface);
+        memset(surface->resource.allocatedMemory, 0, surface->resource.size);
+    }
+
+    surface_validate_location(surface, SFLAG_INSYSMEM);
+    surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
 
     return WINED3D_OK;
 }
