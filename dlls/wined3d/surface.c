@@ -1982,10 +1982,8 @@ HRESULT surface_upload_from_surface(struct wined3d_surface *dst_surface, const P
     const struct wined3d_format *src_format;
     const struct wined3d_format *dst_format;
     const struct wined3d_gl_info *gl_info;
-    enum wined3d_conversion_type convert;
     struct wined3d_context *context;
     struct wined3d_bo_address data;
-    struct wined3d_format format;
     UINT update_w, update_h;
     UINT dst_w, dst_h;
     RECT r, dst_rect;
@@ -2057,11 +2055,6 @@ HRESULT surface_upload_from_surface(struct wined3d_surface *dst_surface, const P
         WARN("Destination rectangle not block-aligned.\n");
         return WINED3DERR_INVALIDCALL;
     }
-
-    /* Use wined3d_surface_blt() instead of uploading directly if we need conversion. */
-    d3dfmt_get_conv(dst_surface, dst_surface->resource.format, FALSE, TRUE, &format, &convert);
-    if (convert != WINED3D_CT_NONE || format.convert)
-        return wined3d_surface_blt(dst_surface, &dst_rect, src_surface, src_rect, 0, NULL, WINED3D_TEXF_POINT);
 
     context = context_acquire(dst_surface->resource.device, NULL);
     gl_info = context->gl_info;
