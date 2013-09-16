@@ -496,18 +496,6 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
     return WINED3D_OK;
 }
 
-static void surface_get_memory(const struct wined3d_surface *surface, struct wined3d_bo_address *data)
-{
-    if (surface->resource.user_memory)
-    {
-        data->addr = surface->resource.user_memory;
-        data->buffer_object = 0;
-        return;
-    }
-    data->addr = surface->resource.allocatedMemory;
-    data->buffer_object = 0;
-}
-
 void surface_prepare_system_memory(struct wined3d_surface *surface)
 {
     TRACE("surface %p.\n", surface);
@@ -1408,7 +1396,7 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
         return;
     }
 
-    surface_get_memory(surface, &data);
+    wined3d_resource_get_memory(&surface->resource, WINED3D_LOCATION_SYSMEM, &data);
 
     if (format->flags & WINED3DFMT_FLAG_COMPRESSED)
     {
@@ -2102,7 +2090,7 @@ HRESULT surface_upload_from_surface(struct wined3d_surface *dst_surface, const P
         wined3d_resource_load_location(&dst_surface->resource, context, WINED3D_LOCATION_TEXTURE_RGB);
     wined3d_texture_bind(dst_surface->container, context, FALSE);
 
-    surface_get_memory(src_surface, &data);
+    wined3d_resource_get_memory(&src_surface->resource, src_surface->resource.locations, &data);
     src_pitch = wined3d_surface_get_pitch(src_surface);
 
     surface_upload_data(dst_surface, gl_info, src_format, src_rect, src_pitch, dst_point, FALSE, &data);
@@ -3365,7 +3353,7 @@ static void read_from_framebuffer(struct wined3d_surface *surface,
     struct wined3d_bo_address data;
     UINT pitch = wined3d_surface_get_pitch(surface);
 
-    surface_get_memory(surface, &data);
+    wined3d_resource_get_memory(&surface->resource, WINED3D_LOCATION_SYSMEM, &data);
 
     /* Context_release does not restore the original context in case of
      * nested context_acquire calls. Only read_from_framebuffer and
@@ -4888,7 +4876,7 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     else surface->flags &= ~SFLAG_GLCKEY;
 
     src_pitch = wined3d_surface_get_pitch(surface);
-    surface_get_memory(surface, &data);
+    wined3d_resource_get_memory(&surface->resource, surface->resource.locations, &data);
     surface_upload_data(surface, gl_info, surface->resource.format, &src_rect, src_pitch, &dst_point, srgb, &data);
 
     return WINED3D_OK;
