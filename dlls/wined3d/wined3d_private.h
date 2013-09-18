@@ -2009,6 +2009,7 @@ struct wined3d_resource
     DWORD locations, map_binding;
     void *heap_memory;
     void *user_memory;
+    void *dib_memory;
     GLuint buffer_object;
     UINT custom_row_pitch, custom_slice_pitch;
 
@@ -2151,6 +2152,7 @@ void wined3d_texture_set_dirty(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
 #define WINED3D_LOCATION_RB_MULTISAMPLE     0x00000040
 #define WINED3D_LOCATION_RB_RESOLVED        0x00000080
 #define WINED3D_LOCATION_USER               0x00000100
+#define WINED3D_LOCATION_DIB                0x00000200
 
 const char *wined3d_debug_location(DWORD location) DECLSPEC_HIDDEN;
 
@@ -2180,7 +2182,6 @@ void wined3d_volume_upload_data(struct wined3d_volume *volume, const struct wine
 struct wined3d_surface_dib
 {
     HBITMAP DIBsection;
-    void *bitmap_data;
     UINT bitmap_size;
 };
 

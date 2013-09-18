@@ -77,7 +77,7 @@ static void surface_cleanup(struct wined3d_surface *surface)
     {
         DeleteDC(surface->hDC);
         DeleteObject(surface->dib.DIBsection);
-        surface->dib.bitmap_data = NULL;
+        surface->resource.dib_memory = NULL;
     }
 
     if (surface->overlay_dest)
@@ -472,7 +472,7 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
     TRACE("Creating a DIB section with size %dx%dx%d, size=%d.\n",
             b_info->bmiHeader.biWidth, b_info->bmiHeader.biHeight,
             b_info->bmiHeader.biBitCount, b_info->bmiHeader.biSizeImage);
-    surface->dib.DIBsection = CreateDIBSection(0, b_info, DIB_RGB_COLORS, &surface->dib.bitmap_data, 0, 0);
+    surface->dib.DIBsection = CreateDIBSection(0, b_info, DIB_RGB_COLORS, &surface->resource.dib_memory, 0, 0);
 
     if (!surface->dib.DIBsection)
     {
@@ -481,7 +481,7 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
         return HRESULT_FROM_WIN32(GetLastError());
     }
 
-    TRACE("DIBSection at %p.\n", surface->dib.bitmap_data);
+    TRACE("DIBSection at %p.\n", surface->resource.dib_memory);
 
     surface->dib.bitmap_size = b_info->bmiHeader.biSizeImage;
 
@@ -2650,7 +2650,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
     {
         DeleteDC(surface->hDC);
         DeleteObject(surface->dib.DIBsection);
-        surface->dib.bitmap_data = NULL;
+        surface->resource.dib_memory = NULL;
         surface->flags &= ~SFLAG_DIBSECTION;
         create_dib = TRUE;
     }
@@ -3172,8 +3172,9 @@ HRESULT CDECL wined3d_surface_map(struct wined3d_surface *surface,
 
 HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
 {
-    struct wined3d_map_desc map;
     HRESULT hr;
+    struct wined3d_device *device = surface->resource.device;
+    struct wined3d_context *context = NULL;
 
     TRACE("surface %p, dc %p.\n", surface, dc);
 
@@ -3200,16 +3201,13 @@ HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
             return WINED3DERR_INVALIDCALL;
     }
 
-    /* Map the surface. */
-    hr = wined3d_surface_map(surface, &map, NULL, 0);
-    if (FAILED(hr))
-    {
-        ERR("Map failed, hr %#x.\n", hr);
-        return hr;
-    }
-    surface->getdc_map_mem = map.data;
+    if (device->d3d_initialized)
+        context = context_acquire(device, NULL);
+    wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_DIB);
+    if (context)
+        context_release(context);
 
-    memcpy(surface->dib.bitmap_data, surface->getdc_map_mem, surface->resource.size);
+    wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_DIB);
 
     if (surface->resource.format->id == WINED3DFMT_P8_UINT
             || surface->resource.format->id == WINED3DFMT_P8_UINT_A8_UNORM)
@@ -3249,6 +3247,7 @@ HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
     }
 
     surface->flags |= SFLAG_DCINUSE;
+    surface->resource.map_count++;
 
     *dc = surface->hDC;
     TRACE("Returning dc %p.\n", *dc);
@@ -3270,12 +3269,7 @@ HRESULT CDECL wined3d_surface_releasedc(struct wined3d_surface *surface, HDC dc)
         return WINEDDERR_NODC;
     }
 
-    memcpy(surface->getdc_map_mem, surface->dib.bitmap_data, surface->resource.size);
-
-    /* We locked first, so unlock now. */
-    surface->getdc_map_mem = NULL;
-    wined3d_surface_unmap(surface);
-
+    surface->resource.map_count--;
     surface->flags &= ~SFLAG_DCINUSE;
 
     return WINED3D_OK;
@@ -3683,11 +3677,11 @@ void flip_surface(struct wined3d_surface *front, struct wined3d_surface *back)
 
     /* Flip the surface data */
     {
-        void* tmp;
+        void *tmp;
 
-        tmp = front->dib.bitmap_data;
-        front->dib.bitmap_data = back->dib.bitmap_data;
-        back->dib.bitmap_data = tmp;
+        tmp = front->resource.dib_memory;
+        front->resource.dib_memory = back->resource.dib_memory;
+        back->resource.dib_memory = tmp;
 
         tmp = front->resource.heap_memory;
         front->resource.heap_memory = back->resource.heap_memory;
@@ -4731,7 +4725,8 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     UINT src_row_pitch, src_slice_pitch;
     struct wined3d_bo_address data;
     POINT dst_point = {0, 0};
-    static const DWORD sysmem_locations = WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER;
+    static const DWORD sysmem_locations = WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER
+            | WINED3D_LOCATION_DIB;
 
     if (surface->resource.locations & WINED3D_LOCATION_DISCARDED)
     {
@@ -4884,6 +4879,7 @@ static void wined3d_surface_load_location(struct wined3d_resource *resource,
     {
         case WINED3D_LOCATION_SYSMEM:
         case WINED3D_LOCATION_USER:
+        case WINED3D_LOCATION_DIB:
             surface_load_sysmem(surface, context, location);
             break;
 

@@ -654,9 +654,9 @@ static void swapchain_gdi_present(struct wined3d_swapchain *swapchain, const REC
     {
         void *tmp;
 
-        tmp = front->dib.bitmap_data;
-        front->dib.bitmap_data = back->dib.bitmap_data;
-        back->dib.bitmap_data = tmp;
+        tmp = front->resource.dib_memory;
+        front->resource.dib_memory = back->resource.dib_memory;
+        back->resource.dib_memory = tmp;
 
         tmp = front->resource.allocatedMemory;
         front->resource.allocatedMemory = back->resource.allocatedMemory;

@@ -477,6 +477,7 @@ DWORD wined3d_resource_access_from_location(DWORD location)
 
         case WINED3D_LOCATION_SYSMEM:
         case WINED3D_LOCATION_USER:
+        case WINED3D_LOCATION_DIB:
             return WINED3D_RESOURCE_ACCESS_CPU;
 
         case WINED3D_LOCATION_BUFFER:
@@ -514,6 +515,13 @@ void wined3d_resource_get_memory(const struct wined3d_resource *resource,
         data->addr = resource->user_memory;
         return;
     }
+    if (location & WINED3D_LOCATION_DIB)
+    {
+        data->buffer_object = 0;
+        data->addr = resource->dib_memory;
+        return;
+    }
+
     ERR("Unexpected location %s.\n", wined3d_debug_location(location));
 }
 
@@ -542,7 +550,7 @@ static BOOL wined3d_resource_load_simple_location(struct wined3d_resource *resou
         struct wined3d_context *context, DWORD location)
 {
     struct wined3d_bo_address dst, src;
-    DWORD sysmem_locations = WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER;
+    DWORD sysmem_locations = WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER | WINED3D_LOCATION_DIB;
 
     if (resource->locations & WINED3D_LOCATION_DISCARDED)
     {
@@ -578,7 +586,8 @@ void wined3d_resource_load_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location)
 {
     DWORD required_access = wined3d_resource_access_from_location(location);
-    DWORD basic_locations = WINED3D_LOCATION_BUFFER | WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER;
+    DWORD basic_locations = WINED3D_LOCATION_BUFFER | WINED3D_LOCATION_SYSMEM
+            | WINED3D_LOCATION_USER | WINED3D_LOCATION_DIB;
 
     if ((resource->locations & location) == location)
     {
@@ -642,6 +651,9 @@ BYTE *wined3d_resource_get_map_ptr(const struct wined3d_resource *resource,
         case WINED3D_LOCATION_USER:
             return resource->user_memory;
 
+        case WINED3D_LOCATION_DIB:
+            return resource->dib_memory;
+
         default:
             ERR("Unexpected map binding %s.\n", wined3d_debug_location(resource->map_binding));
             return NULL;
@@ -665,6 +677,7 @@ void wined3d_resource_release_map_ptr(const struct wined3d_resource *resource,
 
         case WINED3D_LOCATION_SYSMEM:
         case WINED3D_LOCATION_USER:
+        case WINED3D_LOCATION_DIB:
             return;
 
         default:
