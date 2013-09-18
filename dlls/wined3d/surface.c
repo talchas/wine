@@ -6163,6 +6163,7 @@ static HRESULT surface_init(struct wined3d_surface *surface, struct wined3d_text
     wined3d_resource_validate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
     list_init(&surface->renderbuffers);
     list_init(&surface->overlays);
+    surface->resource.map_binding = WINED3D_LOCATION_SYSMEM;
 
     /* Flags */
     surface->flags |= SFLAG_NORMCOORD; /* Default to normalized coords. */

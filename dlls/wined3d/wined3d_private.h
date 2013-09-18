@@ -2006,7 +2006,7 @@ struct wined3d_resource
     struct list privateData;
     struct list resource_list_entry;
 
-    DWORD locations;
+    DWORD locations, map_binding;
     void *heap_memory;
 
     void *parent;
@@ -2127,8 +2127,7 @@ void wined3d_texture_set_dirty(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
 
 #define WINED3D_VFLAG_ALLOCATED             0x00000001
 #define WINED3D_VFLAG_SRGB_ALLOCATED        0x00000002
-#define WINED3D_VFLAG_PBO                   0x00000004
-#define WINED3D_VFLAG_CLIENT_STORAGE        0x00000008
+#define WINED3D_VFLAG_CLIENT_STORAGE        0x00000004
 
 #define WINED3D_LOCATION_DISCARDED          0x00000001
 #define WINED3D_LOCATION_SYSMEM             0x00000002
