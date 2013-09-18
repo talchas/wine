@@ -2008,6 +2008,7 @@ struct wined3d_resource
 
     DWORD locations, map_binding;
     void *heap_memory;
+    GLuint buffer_object;
 
     void *parent;
     const struct wined3d_parent_ops *parent_ops;
@@ -2029,7 +2030,6 @@ void wined3d_resource_free_sysmem(struct wined3d_resource *resource) DECLSPEC_HI
 DWORD wined3d_resource_sanitize_map_flags(const struct wined3d_resource *resource,
         DWORD flags) DECLSPEC_HIDDEN;
 GLbitfield wined3d_resource_gl_map_flags(DWORD d3d_flags) DECLSPEC_HIDDEN;
-GLenum wined3d_resource_gl_legacy_map_flags(DWORD d3d_flags) DECLSPEC_HIDDEN;
 void wined3d_resource_validate_location(struct wined3d_resource *resource,
         DWORD location) DECLSPEC_HIDDEN;
 void wined3d_resource_invalidate_location(struct wined3d_resource *resource,
@@ -2037,6 +2037,10 @@ void wined3d_resource_invalidate_location(struct wined3d_resource *resource,
 void wined3d_resource_load_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location) DECLSPEC_HIDDEN;
 DWORD wined3d_resource_access_from_location(DWORD location) DECLSPEC_HIDDEN;
+BYTE *wined3d_resource_get_map_ptr(const struct wined3d_resource *resource,
+        const struct wined3d_context *context, DWORD flags) DECLSPEC_HIDDEN;
+void wined3d_resource_release_map_ptr(const struct wined3d_resource *resource,
+        const struct wined3d_context *context) DECLSPEC_HIDDEN;
 
 /* Tests show that the start address of resources is 32 byte aligned */
 #define RESOURCE_ALIGNMENT 16
@@ -2148,7 +2152,6 @@ struct wined3d_volume
     DWORD flags;
     GLint texture_level;
     DWORD download_count;
-    GLuint pbo;
 };
 
 static inline struct wined3d_volume *volume_from_resource(struct wined3d_resource *resource)
