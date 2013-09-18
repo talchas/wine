@@ -519,7 +519,7 @@ static void surface_get_memory(const struct wined3d_surface *surface, struct win
     data->buffer_object = 0;
 }
 
-static void surface_prepare_system_memory(struct wined3d_surface *surface)
+void surface_prepare_system_memory(struct wined3d_surface *surface)
 {
     TRACE("surface %p.\n", surface);
 
@@ -692,6 +692,7 @@ static void surface_realize_palette(struct wined3d_surface *surface)
             if (!(surface->flags & SFLAG_INSYSMEM))
             {
                 TRACE("Palette changed with surface that does not have an up to date system memory copy.\n");
+                surface_prepare_system_memory(surface);
                 surface_load_location(surface, SFLAG_INSYSMEM);
             }
             surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
@@ -725,10 +726,10 @@ static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWOR
     TRACE("surface %p, rect %s, flags %#x.\n",
             surface, wine_dbgstr_rect(rect), flags);
 
+    surface_prepare_system_memory(surface);
     if (flags & WINED3D_MAP_DISCARD)
     {
         TRACE("WINED3D_MAP_DISCARD flag passed, marking SYSMEM as up to date.\n");
-        surface_prepare_system_memory(surface);
         surface_validate_location(surface, SFLAG_INSYSMEM);
     }
     else
@@ -1169,6 +1170,7 @@ static void surface_unload(struct wined3d_resource *resource)
 
     TRACE("surface %p.\n", surface);
 
+    surface_prepare_system_memory(surface);
     if (resource->pool == WINED3D_POOL_DEFAULT)
     {
         /* Default pool resources are supposed to be destroyed before Reset is called.
@@ -1184,7 +1186,6 @@ static void surface_unload(struct wined3d_resource *resource)
          * TODO: Setting SFLAG_DISCARDED is be a better solution, but it only works for
          * depth stencils so far. */
 
-        surface_prepare_system_memory(surface);
         if (surface->resource.heap_memory)
             memset(surface->resource.heap_memory, 0, surface->resource.size);
         surface_validate_location(surface, SFLAG_INSYSMEM);
@@ -4720,8 +4721,6 @@ static DWORD resource_access_from_location(DWORD location)
 static void surface_load_sysmem(struct wined3d_surface *surface,
         const struct wined3d_gl_info *gl_info)
 {
-    surface_prepare_system_memory(surface);
-
     if (surface->flags & (SFLAG_INRB_MULTISAMPLE | SFLAG_INRB_RESOLVED))
         surface_load_location(surface, SFLAG_INTEXTURE);
 
