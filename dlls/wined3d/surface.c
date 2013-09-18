@@ -1188,7 +1188,6 @@ static void surface_unload(struct wined3d_resource *resource)
         if (surface->resource.heap_memory)
             memset(surface->resource.heap_memory, 0, surface->resource.size);
         surface_validate_location(surface, SFLAG_INSYSMEM);
-        surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
 
         /* We also get here when the ddraw swapchain is destroyed, for example
          * for a mode switch. In this case this surface won't necessarily be
