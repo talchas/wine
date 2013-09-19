@@ -1320,10 +1320,10 @@ void surface_set_texture_target(struct wined3d_surface *surface, GLenum target, 
 /* This call just downloads data, the caller is responsible for binding the
  * correct texture. */
 /* Context activation is done by the caller. */
-static void surface_download_data(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info)
+static void surface_download_data(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info,
+        const struct wined3d_bo_address *data)
 {
     const struct wined3d_format *format = surface->resource.format;
-    struct wined3d_bo_address data;
 
     /* Only support read back of converted P8 surfaces. */
     if (surface->flags & SFLAG_CONVERTED && format->id != WINED3DFMT_P8_UINT)
@@ -1332,15 +1332,19 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
         return;
     }
 
-    wined3d_resource_get_memory(&surface->resource, WINED3D_LOCATION_SYSMEM, &data);
+    if (data->buffer_object)
+    {
+        GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, data->buffer_object));
+        checkGLcall("glBindBufferARB");
+    }
 
     if (format->flags & WINED3DFMT_FLAG_COMPRESSED)
     {
         TRACE("(%p) : Calling glGetCompressedTexImageARB level %d, format %#x, type %#x, data %p.\n",
-                surface, surface->texture_level, format->glFormat, format->glType, data.addr);
+                surface, surface->texture_level, format->glFormat, format->glType, data->addr);
 
         GL_EXTCALL(glGetCompressedTexImageARB(surface->texture_target,
-                surface->texture_level, data.addr));
+                surface->texture_level, data->addr));
         checkGLcall("glGetCompressedTexImageARB");
     }
     else
@@ -1365,10 +1369,13 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
             dst_pitch = wined3d_surface_get_pitch(surface);
             src_pitch = (src_pitch + alignment - 1) & ~(alignment - 1);
             mem = HeapAlloc(GetProcessHeap(), 0, src_pitch * surface->pow2Height);
+
+            if (data->buffer_object)
+                ERR("Attempting to download a SFLAG_NONPOW2 texture with a PBO\n");
         }
         else
         {
-            mem = data.addr;
+            mem = data->addr;
         }
 
         TRACE("(%p) : Calling glGetTexImage level %d, format %#x, type %#x, data %p\n",
@@ -1433,7 +1440,7 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
              * rendering. If an app does, the SFLAG_DYNLOCK flag will kick in and the memory copy won't be released,
              * and doesn't have to be re-read. */
             src_data = mem;
-            dst_data = data.addr;
+            dst_data = data->addr;
             TRACE("(%p) : Repacking the surface data from pitch %d to pitch %d\n", surface, src_pitch, dst_pitch);
             for (y = 0; y < surface->resource.height; ++y)
             {
@@ -1444,6 +1451,12 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
 
             HeapFree(GetProcessHeap(), 0, mem);
         }
+    }
+
+    if (data->buffer_object)
+    {
+        GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0));
+        checkGLcall("glBindBufferARB");
     }
 }
 
@@ -4716,9 +4729,11 @@ static void surface_load_sysmem(struct wined3d_surface *surface,
     /* Download the surface to system memory. */
     if (surface->resource.locations & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB))
     {
+        struct wined3d_bo_address dst;
+        wined3d_resource_get_memory(&surface->resource, WINED3D_LOCATION_SYSMEM, &dst);
         wined3d_texture_bind_and_dirtify(surface->container, context,
                 !(surface->resource.locations & WINED3D_LOCATION_TEXTURE_RGB));
-        surface_download_data(surface, gl_info);
+        surface_download_data(surface, gl_info, &dst);
         return;
     }
 
