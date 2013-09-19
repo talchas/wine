@@ -2147,6 +2147,7 @@ void wined3d_texture_set_dirty(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
 #define WINED3D_LOCATION_DRAWABLE           0x00000020
 #define WINED3D_LOCATION_RB_MULTISAMPLE     0x00000040
 #define WINED3D_LOCATION_RB_RESOLVED        0x00000080
+#define WINED3D_LOCATION_USER               0x00000100
 
 const char *wined3d_debug_location(DWORD location) DECLSPEC_HIDDEN;
 

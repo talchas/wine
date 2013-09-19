@@ -3776,7 +3776,7 @@ void wined3d_get_draw_rect(const struct wined3d_state *state, RECT *rect)
 
 const char *wined3d_debug_location(DWORD location)
 {
-    char buf[256];
+    char buf[280];
 
     buf[0] = '\0';
 #define LOCATION_TO_STR(u) if (location & u) { strcat(buf, " | "#u); location &= ~u; }
@@ -3788,6 +3788,7 @@ const char *wined3d_debug_location(DWORD location)
     LOCATION_TO_STR(WINED3D_LOCATION_DRAWABLE);
     LOCATION_TO_STR(WINED3D_LOCATION_RB_MULTISAMPLE);
     LOCATION_TO_STR(WINED3D_LOCATION_RB_RESOLVED);
+    LOCATION_TO_STR(WINED3D_LOCATION_USER);
 #undef LOCATION_TO_STR
     if (location) FIXME("Unrecognized location flag(s) %#x.\n", location);
 

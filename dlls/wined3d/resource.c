@@ -476,6 +476,7 @@ DWORD wined3d_resource_access_from_location(DWORD location)
             return 0;
 
         case WINED3D_LOCATION_SYSMEM:
+        case WINED3D_LOCATION_USER:
             return WINED3D_RESOURCE_ACCESS_CPU;
 
         case WINED3D_LOCATION_BUFFER:
@@ -504,13 +505,72 @@ void wined3d_resource_get_memory(const struct wined3d_resource *resource,
     if (location & WINED3D_LOCATION_SYSMEM)
     {
         data->buffer_object = 0;
-        if (resource->user_memory)
-            data->addr = resource->user_memory;
-        else
-            data->addr = resource->heap_memory;
+        data->addr = resource->heap_memory;
+        return;
+    }
+    if (location & WINED3D_LOCATION_USER)
+    {
+        data->buffer_object = 0;
+        data->addr = resource->user_memory;
         return;
     }
     ERR("Unexpected location %s.\n", wined3d_debug_location(location));
+}
+
+/* Context activation is done by the caller */
+static void wined3d_resource_download_buffer(const struct wined3d_resource *resource,
+        const struct wined3d_gl_info *gl_info, const struct wined3d_bo_address *dst_data)
+{
+    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, resource->buffer_object));
+    GL_EXTCALL(glGetBufferSubDataARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0, resource->size, dst_data->addr));
+    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
+    checkGLcall("Download PBO");
+}
+
+/* Context activation is done by the caller */
+static void wined3d_resource_upload_buffer(const struct wined3d_resource *resource,
+        const struct wined3d_gl_info *gl_info, const struct wined3d_bo_address *src_data)
+{
+    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, resource->buffer_object));
+    GL_EXTCALL(glBufferSubDataARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0, resource->size, src_data->addr));
+    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
+    checkGLcall("Upload PBO");
+}
+
+/* Context activation is optionally by the caller. Context may be NULL. */
+static BOOL wined3d_resource_load_simple_location(struct wined3d_resource *resource,
+        struct wined3d_context *context, DWORD location)
+{
+    struct wined3d_bo_address dst, src;
+    DWORD sysmem_locations = WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER;
+
+    if (resource->locations & WINED3D_LOCATION_DISCARDED)
+    {
+        TRACE("Resource was discarded, nothing to do.\n");
+        return TRUE;
+    }
+
+    wined3d_resource_get_memory(resource, location, &dst);
+
+    if (resource->locations & sysmem_locations)
+    {
+        wined3d_resource_get_memory(resource,
+                resource->locations & sysmem_locations, &src);
+
+        if (location == WINED3D_LOCATION_BUFFER)
+            wined3d_resource_upload_buffer(resource, context->gl_info, &src);
+        else
+            memcpy(dst.addr, src.addr, resource->size);
+
+        return TRUE;
+    }
+    if (resource->locations & WINED3D_LOCATION_BUFFER)
+    {
+        wined3d_resource_download_buffer(resource, context->gl_info, &dst);
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 /* Context activation is optionally by the caller. Context may be NULL. */
@@ -518,7 +578,7 @@ void wined3d_resource_load_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location)
 {
     DWORD required_access = wined3d_resource_access_from_location(location);
-    DWORD basic_locations = WINED3D_LOCATION_BUFFER | WINED3D_LOCATION_SYSMEM;
+    DWORD basic_locations = WINED3D_LOCATION_BUFFER | WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER;
 
     if ((resource->locations & location) == location)
     {
@@ -533,9 +593,8 @@ void wined3d_resource_load_location(struct wined3d_resource *resource,
 
     if (location & basic_locations)
     {
-        if (resource->locations & WINED3D_LOCATION_DISCARDED)
+        if (wined3d_resource_load_simple_location(resource, context, location))
         {
-            TRACE("Resource was discarded, nothing to do.\n");
             resource->locations |= location;
             return;
         }
@@ -580,6 +639,9 @@ BYTE *wined3d_resource_get_map_ptr(const struct wined3d_resource *resource,
         case WINED3D_LOCATION_SYSMEM:
             return resource->heap_memory;
 
+        case WINED3D_LOCATION_USER:
+            return resource->user_memory;
+
         default:
             ERR("Unexpected map binding %s.\n", wined3d_debug_location(resource->map_binding));
             return NULL;
@@ -602,6 +664,7 @@ void wined3d_resource_release_map_ptr(const struct wined3d_resource *resource,
             return;
 
         case WINED3D_LOCATION_SYSMEM:
+        case WINED3D_LOCATION_USER:
             return;
 
         default:
@@ -651,6 +714,9 @@ BOOL wined3d_resource_prepare_map_memory(struct wined3d_resource *resource, stru
 
         case WINED3D_LOCATION_SYSMEM:
             return wined3d_resource_prepare_system_memory(resource);
+
+        case WINED3D_LOCATION_USER:
+            return TRUE;
 
         default:
             ERR("Unexpected map binding %s.\n", wined3d_debug_location(resource->map_binding));
