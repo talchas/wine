@@ -373,8 +373,9 @@ static void get_color_masks(const struct wined3d_format *format, DWORD *masks)
     masks[2] = ((1 << format->blue_size) - 1) << format->blue_offset;
 }
 
-static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
+BOOL wined3d_surface_prepare_dib(struct wined3d_resource *resource)
 {
+    struct wined3d_surface *surface = surface_from_resource(resource);
     const struct wined3d_format *format = surface->resource.format;
     SYSTEM_INFO sysInfo;
     BITMAPINFO *b_info;
@@ -384,11 +385,8 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
 
     TRACE("surface %p.\n", surface);
 
-    if (!(format->flags & WINED3DFMT_FLAG_GETDC))
-    {
-        WARN("Cannot use GetDC on a %s surface.\n", debug_d3dformat(format->id));
-        return WINED3DERR_INVALIDCALL;
-    }
+    if (surface->hDC)
+        return TRUE;
 
     switch (format->byte_count)
     {
@@ -410,7 +408,7 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
     }
 
     if (!b_info)
-        return E_OUTOFMEMORY;
+        return FALSE;
 
     /* Some applications access the surface in via DWORDs, and do not take
      * the necessary care at the end of the surface. So we need at least
@@ -495,7 +493,7 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
 
     surface->flags |= SFLAG_DIBSECTION;
 
-    return WINED3D_OK;
+    return TRUE;
 }
 
 static void surface_evict_sysmem(struct wined3d_surface *surface)
@@ -1227,7 +1225,6 @@ static const struct wined3d_surface_ops surface_ops =
 static HRESULT gdi_surface_private_setup(struct wined3d_surface *surface)
 {
     HRESULT hr;
-
     TRACE("surface %p.\n", surface);
 
     if (surface->resource.usage & WINED3DUSAGE_OVERLAY)
@@ -1238,13 +1235,15 @@ static HRESULT gdi_surface_private_setup(struct wined3d_surface *surface)
 
     /* Sysmem textures have memory already allocated - release it,
      * this avoids an unnecessary memcpy. */
-    hr = surface_create_dib_section(surface);
+    hr = wined3d_surface_prepare_dib(&surface->resource);
     if (FAILED(hr))
         return hr;
 
     /* We don't mind the nonpow2 stuff in GDI. */
     surface->pow2Width = surface->resource.width;
     surface->pow2Height = surface->resource.height;
+
+    surface->resource.map_binding = WINED3D_LOCATION_DIB;
 
     return WINED3D_OK;
 }
@@ -2085,7 +2084,8 @@ static void surface_allocate_surface(struct wined3d_surface *surface, const stru
 
     if (gl_info->supported[APPLE_CLIENT_STORAGE])
     {
-        if (surface->flags & (SFLAG_NONPOW2 | SFLAG_DIBSECTION | SFLAG_CONVERTED))
+        if (surface->flags & (SFLAG_NONPOW2 | SFLAG_DIBSECTION | SFLAG_CONVERTED)
+                || !wined3d_resource_prepare_system_memory(&surface->resource))
         {
             /* In some cases we want to disable client storage.
              * SFLAG_NONPOW2 has a bigger opengl texture than the client memory, and different pitches
@@ -2096,7 +2096,6 @@ static void surface_allocate_surface(struct wined3d_surface *surface, const stru
         }
         else
         {
-            wined3d_resource_prepare_system_memory(&surface->resource);
             surface->flags |= SFLAG_CLIENT;
 
             mem = surface->resource.heap_memory;
@@ -2648,6 +2647,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
     if (surface->flags & SFLAG_DIBSECTION)
     {
         DeleteDC(surface->hDC);
+        surface->hDC = NULL;
         DeleteObject(surface->dib.DIBsection);
         surface->resource.dib_memory = NULL;
         surface->flags &= ~SFLAG_DIBSECTION;
@@ -2694,7 +2694,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
 
     if (create_dib)
     {
-        if (FAILED(hr = surface_create_dib_section(surface)))
+        if (FAILED(hr = wined3d_surface_prepare_dib(&surface->resource)))
         {
             ERR("Failed to create dib section, hr %#x.\n", hr);
             return hr;
@@ -3093,11 +3093,16 @@ HRESULT CDECL wined3d_surface_map(struct wined3d_surface *surface,
 
 HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
 {
-    HRESULT hr;
     struct wined3d_device *device = surface->resource.device;
     struct wined3d_context *context = NULL;
 
     TRACE("surface %p, dc %p.\n", surface, dc);
+
+    if (!(surface->resource.format->flags & WINED3DFMT_FLAG_GETDC))
+    {
+        WARN("Cannot use GetDC on a %s surface.\n", debug_d3dformat(surface->resource.format->id));
+        return WINED3DERR_INVALIDCALL;
+    }
 
     /* Give more detailed info for ddraw. */
     if (surface->flags & SFLAG_DCINUSE)
@@ -3117,9 +3122,12 @@ HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
             context_release(context);
             surface_release_client_storage(surface);
         }
-        hr = surface_create_dib_section(surface);
-        if (FAILED(hr))
+
+        if (!wined3d_surface_prepare_dib(&surface->resource))
             return WINED3DERR_INVALIDCALL;
+        if ((!(surface->flags & SFLAG_PIN_SYSMEM))
+                && surface->resource.map_binding != WINED3D_LOCATION_USER)
+            surface->resource.map_binding = WINED3D_LOCATION_DIB;
     }
 
     if (device->d3d_initialized)

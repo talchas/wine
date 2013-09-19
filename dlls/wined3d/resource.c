@@ -731,6 +731,15 @@ BOOL wined3d_resource_prepare_map_memory(struct wined3d_resource *resource, stru
         case WINED3D_LOCATION_USER:
             return TRUE;
 
+        case WINED3D_LOCATION_DIB:
+            if (resource->type != WINED3D_RTYPE_SURFACE)
+            {
+                ERR("Trying to create a DIB for a non-surface resource.\n");
+                return FALSE;
+            }
+
+            return wined3d_surface_prepare_dib(resource);
+
         default:
             ERR("Unexpected map binding %s.\n", wined3d_debug_location(resource->map_binding));
             return FALSE;
