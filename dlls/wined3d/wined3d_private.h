@@ -2010,6 +2010,7 @@ struct wined3d_resource
     void *heap_memory;
     void *user_memory;
     GLuint buffer_object;
+    UINT custom_row_pitch, custom_slice_pitch;
 
     void *parent;
     const struct wined3d_parent_ops *parent_ops;
@@ -2218,7 +2219,6 @@ struct wined3d_surface
 
     DWORD flags;
 
-    UINT pitch;
     UINT pow2Width;
     UINT pow2Height;
 
