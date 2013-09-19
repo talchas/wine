@@ -502,17 +502,8 @@ void surface_prepare_system_memory(struct wined3d_surface *surface)
 {
     TRACE("surface %p.\n", surface);
 
-    if (!surface->resource.allocatedMemory && !surface->resource.user_memory)
-    {
-        /* Whatever surface we have, make sure that there is memory allocated
-         * for the downloaded copy. */
-        if (!surface->resource.heap_memory && !wined3d_resource_allocate_sysmem(&surface->resource))
-            ERR("Failed to allocate system memory.\n");
-        surface->resource.allocatedMemory = surface->resource.heap_memory;
-
-        if (surface->resource.locations & WINED3D_LOCATION_SYSMEM)
-            ERR("Surface without memory has WINED3D_LOCATION_SYSMEM set.\n");
-    }
+    if (!surface->resource.heap_memory && !wined3d_resource_allocate_sysmem(&surface->resource))
+        ERR("Failed to allocate system memory.\n");
 }
 
 static void surface_evict_sysmem(struct wined3d_surface *surface)
@@ -522,7 +513,6 @@ static void surface_evict_sysmem(struct wined3d_surface *surface)
         return;
 
     wined3d_resource_free_sysmem(&surface->resource);
-    surface->resource.allocatedMemory = NULL;
     wined3d_resource_invalidate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
 }
 
@@ -2110,9 +2100,6 @@ static void surface_allocate_surface(struct wined3d_surface *surface, const stru
             surface_prepare_system_memory(surface);
             surface->flags |= SFLAG_CLIENT;
 
-            /* Point OpenGL to our allocated texture memory. Do not use
-             * resource.allocatedMemory here because it might point into a
-             * PBO. Instead use heap_memory. */
             mem = surface->resource.heap_memory;
 
             gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_CLIENT_STORAGE_APPLE, GL_TRUE);
@@ -2669,7 +2656,6 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
     }
 
     surface->resource.locations = WINED3D_LOCATION_DISCARDED;
-    surface->resource.allocatedMemory = NULL;
     wined3d_resource_free_sysmem(&surface->resource);
 
     surface->resource.width = width;
@@ -2714,12 +2700,11 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
             ERR("Failed to create dib section, hr %#x.\n", hr);
             return hr;
         }
-        surface->resource.allocatedMemory = surface->dib.bitmap_data;
     }
     else if (!surface->resource.user_memory)
     {
         surface_prepare_system_memory(surface);
-        memset(surface->resource.allocatedMemory, 0, surface->resource.size);
+        memset(surface->resource.heap_memory, 0, surface->resource.size);
     }
 
     wined3d_resource_validate_location(&surface->resource, surface->resource.map_binding);
@@ -3703,10 +3688,6 @@ void flip_surface(struct wined3d_surface *front, struct wined3d_surface *back)
         tmp = front->dib.bitmap_data;
         front->dib.bitmap_data = back->dib.bitmap_data;
         back->dib.bitmap_data = tmp;
-
-        tmp = front->resource.allocatedMemory;
-        front->resource.allocatedMemory = back->resource.allocatedMemory;
-        back->resource.allocatedMemory = tmp;
 
         tmp = front->resource.heap_memory;
         front->resource.heap_memory = back->resource.heap_memory;
@@ -6132,9 +6113,6 @@ static HRESULT surface_init(struct wined3d_surface *surface, struct wined3d_text
         surface->flags |= SFLAG_PIN_SYSMEM;
     if (lockable || desc->format == WINED3DFMT_D16_LOCKABLE)
         surface->resource.access_flags |= WINED3D_RESOURCE_ACCESS_CPU;
-
-    TRACE("surface %p, memory %p, size %u\n",
-            surface, surface->resource.allocatedMemory, surface->resource.size);
 
     /* Call the private setup routine */
     hr = surface->surface_ops->surface_private_setup(surface);
