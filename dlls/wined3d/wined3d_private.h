@@ -2004,6 +2004,7 @@ struct wined3d_resource
     DWORD priority;
     void *heap_memory, *user_memory, *bitmap_data;
     GLuint buffer_object;
+    UINT custom_row_pitch, custom_slice_pitch;
     struct list privateData;
     struct list resource_list_entry;
     DWORD locations, map_binding;
@@ -2216,7 +2217,6 @@ struct wined3d_surface
 
     DWORD flags;
 
-    UINT pitch;
     UINT pow2Width;
     UINT pow2Height;
 
