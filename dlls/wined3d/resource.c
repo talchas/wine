@@ -497,6 +497,7 @@ void wined3d_resource_load_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location)
 {
     DWORD required_access = wined3d_resource_access_from_location(location);
+    DWORD basic_locations = WINED3D_LOCATION_BUFFER | WINED3D_LOCATION_SYSMEM;
 
     if ((resource->locations & location) == location)
     {
@@ -508,6 +509,16 @@ void wined3d_resource_load_location(struct wined3d_resource *resource,
     if ((resource->access_flags & required_access) != required_access)
         WARN("Operation requires %#x access, but resource only has %#x.\n",
                 required_access, resource->access_flags);
+
+    if (location & basic_locations)
+    {
+        if (resource->locations & WINED3D_LOCATION_DISCARDED)
+        {
+            TRACE("Resource was discarded, nothing to do.\n");
+            resource->locations |= location;
+            return;
+        }
+    }
 
     /* Context is NULL in ddraw-only operation without OpenGL. */
     if (!context)
