@@ -3079,6 +3079,9 @@ struct wined3d_surface * CDECL wined3d_surface_from_resource(struct wined3d_reso
 
 HRESULT CDECL wined3d_surface_unmap(struct wined3d_surface *surface)
 {
+    struct wined3d_device *device = surface->resource.device;
+    struct wined3d_context *context = NULL;
+
     TRACE("surface %p.\n", surface);
 
     if (!surface->resource.map_count)
@@ -3087,6 +3090,12 @@ HRESULT CDECL wined3d_surface_unmap(struct wined3d_surface *surface)
         return WINEDDERR_NOTLOCKED;
     }
     --surface->resource.map_count;
+
+    if (device->d3d_initialized)
+        context = context_acquire(device, NULL);
+    wined3d_resource_release_map_ptr(&surface->resource, context);
+    if (device->d3d_initialized)
+        context_release(context);
 
     if (surface->swapchain && surface == surface->swapchain->front_buffer)
         surface->surface_ops->surface_frontbuffer_updated(surface);
@@ -3163,25 +3172,7 @@ HRESULT CDECL wined3d_surface_map(struct wined3d_surface *surface,
     if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
         wined3d_resource_invalidate_location(&surface->resource, ~surface->resource.map_binding);
 
-    switch (surface->resource.map_binding)
-    {
-        case WINED3D_LOCATION_BUFFER:
-            ERR("Not possible.\n");
-            base_memory = NULL;
-            break;
-
-        case WINED3D_LOCATION_USER:
-            base_memory = surface->resource.user_memory;
-            break;
-
-        case WINED3D_LOCATION_SYSMEM:
-            base_memory = surface->resource.heap_memory;
-            break;
-
-        default:
-            ERR("Unknown map binding %s.\n", wined3d_debug_location(surface->resource.map_binding));
-            base_memory = NULL;
-    }
+    base_memory = wined3d_resource_get_map_ptr(&surface->resource, context, flags);
 
     if (format->flags & WINED3DFMT_FLAG_BROKEN_PITCH)
         map_desc->row_pitch = surface->resource.width * format->byte_count;

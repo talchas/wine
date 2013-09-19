@@ -537,7 +537,7 @@ static void wined3d_resource_upload_buffer(const struct wined3d_resource *resour
     checkGLcall("Upload PBO");
 }
 
-/* Context activation is optionally by the caller. Context may be NULL. */
+/* Context activation is optionally done by the caller. Context may be NULL. */
 static BOOL wined3d_resource_load_simple_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location)
 {
@@ -703,7 +703,7 @@ BOOL wined3d_resource_prepare_system_memory(struct wined3d_resource *resource)
     return TRUE;
 }
 
-/* Context activation is done by the caller. */
+/* Context activation is optionally by the caller. Context may be NULL. */
 BOOL wined3d_resource_prepare_map_memory(struct wined3d_resource *resource, struct wined3d_context *context)
 {
     switch (resource->map_binding)
