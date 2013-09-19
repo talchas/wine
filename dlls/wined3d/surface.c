@@ -498,14 +498,6 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
     return WINED3D_OK;
 }
 
-void surface_prepare_system_memory(struct wined3d_surface *surface)
-{
-    TRACE("surface %p.\n", surface);
-
-    if (!surface->resource.heap_memory && !wined3d_resource_allocate_sysmem(&surface->resource))
-        ERR("Failed to allocate system memory.\n");
-}
-
 static void surface_evict_sysmem(struct wined3d_surface *surface)
 {
     if (surface->resource.map_count || (surface->flags & SFLAG_DONOTFREE)
@@ -1138,7 +1130,8 @@ static void surface_unload(struct wined3d_resource *resource)
     context = context_acquire(device, NULL);
     gl_info = context->gl_info;
 
-    if (resource->pool == WINED3D_POOL_DEFAULT)
+    if (resource->pool == WINED3D_POOL_DEFAULT
+            || !wined3d_resource_prepare_system_memory(&surface->resource))
     {
         /* Default pool resources are supposed to be destroyed before Reset is called.
          * Implicit resources stay however. So this means we have an implicit render target
@@ -1157,9 +1150,15 @@ static void surface_unload(struct wined3d_resource *resource)
     {
         DWORD store_location = surface->resource.map_binding;
 
-        surface_prepare_system_memory(surface);
         if (store_location == WINED3D_LOCATION_BUFFER)
+        {
+            wined3d_resource_prepare_system_memory(&surface->resource);
             store_location = WINED3D_LOCATION_SYSMEM;
+        }
+        else
+        {
+            wined3d_resource_prepare_map_memory(&surface->resource, context);
+        }
 
         wined3d_resource_load_location(&surface->resource, context, store_location);
         wined3d_resource_invalidate_location(&surface->resource, ~store_location);
@@ -2097,7 +2096,7 @@ static void surface_allocate_surface(struct wined3d_surface *surface, const stru
         }
         else
         {
-            surface_prepare_system_memory(surface);
+            wined3d_resource_prepare_system_memory(&surface->resource);
             surface->flags |= SFLAG_CLIENT;
 
             mem = surface->resource.heap_memory;
@@ -2703,7 +2702,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
     }
     else if (!surface->resource.user_memory)
     {
-        surface_prepare_system_memory(surface);
+        wined3d_resource_prepare_system_memory(&surface->resource);
         memset(surface->resource.heap_memory, 0, surface->resource.size);
     }
 
@@ -3271,6 +3270,20 @@ HRESULT CDECL wined3d_surface_releasedc(struct wined3d_surface *surface, HDC dc)
 
     surface->resource.map_count--;
     surface->flags &= ~SFLAG_DCINUSE;
+
+    /* User memory is up to date without a prior lock call, see
+     * test_user_memory_getdc in ddraw. */
+    if (surface->resource.map_binding == WINED3D_LOCATION_USER)
+    {
+        struct wined3d_device *device = surface->resource.device;
+        struct wined3d_context *context = NULL;
+
+        if (device->d3d_initialized)
+            context = context_acquire(device, NULL);
+        wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_USER);
+        if (context)
+            context_release(context);
+    }
 
     return WINED3D_OK;
 }
