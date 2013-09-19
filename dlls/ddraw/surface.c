@@ -6068,8 +6068,10 @@ HRESULT ddraw_surface_init(struct ddraw_surface *surface, struct ddraw *ddraw, s
     }
     else if (!(desc->dwFlags & DDSD_LPSURFACE))
     {
+        struct wined3d_resource *resource = wined3d_surface_get_resource(wined3d_surface);
+        wined3d_resource_get_pitch(resource, &row_pitch, &slice_pitch);
         desc->dwFlags |= DDSD_PITCH;
-        desc->u1.lPitch = wined3d_surface_get_pitch(wined3d_surface);
+        desc->u1.lPitch = row_pitch;
     }
 
     if (desc->dwFlags & DDSD_LPSURFACE)
