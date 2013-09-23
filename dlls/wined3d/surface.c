@@ -5638,6 +5638,34 @@ static HRESULT cpu_blit_depth_fill(struct wined3d_device *device,
     return WINED3DERR_INVALIDCALL;
 }
 
+static void surface_download_to_surface(struct wined3d_surface *dst, struct wined3d_surface *src)
+{
+    struct wined3d_device *device = dst->resource.device;
+    struct wined3d_context *context = context_acquire(device, NULL);
+    struct wined3d_bo_address data;
+
+    if (src->resource.locations & WINED3D_LOCATION_TEXTURE_SRGB)
+    {
+        wined3d_texture_bind_and_dirtify(src->container, context, TRUE);
+    }
+    else
+    {
+        wined3d_texture_bind_and_dirtify(src->container, context, FALSE);
+        wined3d_resource_load_location(&src->resource, context, WINED3D_LOCATION_TEXTURE_RGB);
+    }
+
+    wined3d_resource_prepare_map_memory(&dst->resource, context);
+    /* We always write to the full surface */
+    wined3d_resource_validate_location(&dst->resource, dst->resource.map_binding);
+    wined3d_resource_get_memory(&dst->resource, dst->resource.map_binding, &data);
+
+    surface_download_data(src, context->gl_info, &data);
+
+    wined3d_resource_invalidate_location(&dst->resource, ~dst->resource.map_binding);
+
+    context_release(context);
+}
+
 const struct blit_shader cpu_blit =  {
     cpu_blit_alloc,
     cpu_blit_free,
@@ -5892,6 +5920,23 @@ HRESULT CDECL wined3d_surface_blt(struct wined3d_surface *dst_surface, const REC
                         }
                         return WINED3D_OK;
                     }
+                }
+            }
+            else if (src_surface->resource.pool != WINED3D_POOL_SYSTEM_MEM
+                    && src_surface->resource.pool != WINED3D_POOL_SCRATCH
+                    && dst_surface->resource.pool == WINED3D_POOL_SYSTEM_MEM)
+            {
+                if (scale)
+                    TRACE("Not doing download because of scaling.\n");
+                else if (convert)
+                    TRACE("Not doing download because of format conversion.\n");
+                else if (!surface_is_full_rect(src_surface, &src_rect)
+                        || !surface_is_full_rect(dst_surface, &dst_rect))
+                    FIXME("Not doing download because of size mismatch.\n");
+                else
+                {
+                    surface_download_to_surface(dst_surface, src_surface);
+                    return WINED3D_OK;
                 }
             }
 
