@@ -511,6 +511,30 @@ static void surface_force_reload(struct wined3d_surface *surface)
     surface->flags &= ~(SFLAG_ALLOCATED | SFLAG_SRGBALLOCATED);
 }
 
+static BOOL surface_use_pbo(const struct wined3d_surface *surface)
+{
+    const struct wined3d_gl_info *gl_info = &surface->resource.device->adapter->gl_info;
+
+    /* Note that SFLAG_PIN_SYSMEM disables PBOs for all ddraw surfaces except the
+     * swapchain's front buffer. The nice side effect of this is that we don't have
+     * to worry about surfaces that are converted because they have a color key set.
+     * Keep this in mind when adding support for ddraw PBOs with ARB_buffer_storage. */
+    if (!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT])
+        return FALSE;
+    if (surface->resource.pool != WINED3D_POOL_DEFAULT)
+        return FALSE;
+    if (surface->flags & (SFLAG_NONPOW2 | SFLAG_PIN_SYSMEM))
+        return FALSE;
+    if (surface->resource.format->convert)
+        return FALSE;
+    if (!(surface->resource.access_flags & WINED3D_RESOURCE_ACCESS_CPU))
+        return FALSE;
+    if (surface->resource.format->flags & WINED3DFMT_FLAG_PALETTE)
+        return FALSE;
+
+    return TRUE;
+}
+
 static HRESULT surface_private_setup(struct wined3d_surface *surface)
 {
     /* TODO: Check against the maximum texture sizes supported by the video card. */
@@ -597,6 +621,9 @@ static HRESULT surface_private_setup(struct wined3d_surface *surface)
 
     if (surface->resource.usage & WINED3DUSAGE_DEPTHSTENCIL)
         surface->resource.locations |= WINED3D_LOCATION_DISCARDED;
+
+    if (surface_use_pbo(surface))
+        surface->resource.map_binding = WINED3D_LOCATION_BUFFER;
 
     return WINED3D_OK;
 }
@@ -2654,8 +2681,6 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
         surface->flags &= ~SFLAG_NONPOW2;
 
     surface->resource.user_memory = mem;
-    if (mem)
-        surface->resource.map_binding = WINED3D_LOCATION_USER;
     surface->resource.custom_row_pitch = pitch;
     surface->resource.custom_slice_pitch = pitch * surface->resource.height;
     surface->resource.format = format;
@@ -2674,14 +2699,19 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
             return hr;
         }
     }
-    else if (!surface->resource.user_memory)
-    {
-        wined3d_resource_prepare_system_memory(&surface->resource);
-        memset(surface->resource.heap_memory, 0, surface->resource.size);
-    }
 
-    wined3d_resource_validate_location(&surface->resource, surface->resource.map_binding);
-    wined3d_resource_invalidate_location(&surface->resource, ~surface->resource.map_binding);
+    if (surface->resource.user_memory)
+    {
+        surface->resource.map_binding = WINED3D_LOCATION_USER;
+        wined3d_resource_validate_location(&surface->resource, WINED3D_LOCATION_USER);
+        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_USER);
+    }
+    else if (device->d3d_initialized && surface_use_pbo(surface))
+        surface->resource.map_binding = WINED3D_LOCATION_BUFFER;
+    else if (surface->flags & SFLAG_DIBSECTION)
+        surface->resource.map_binding = WINED3D_LOCATION_DIB;
+    else
+        surface->resource.map_binding = WINED3D_LOCATION_SYSMEM;
 
     return WINED3D_OK;
 }
@@ -3323,6 +3353,7 @@ static void read_from_framebuffer(struct wined3d_surface *surface,
     if (!srcIsUpsideDown)
     {
         UINT len;
+
         /* glReadPixels returns the image upside down, and there is no way to prevent this.
             Flip the lines in software */
         len = surface->resource.width * bpp;
@@ -4633,7 +4664,7 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     struct wined3d_bo_address data;
     POINT dst_point = {0, 0};
     static const DWORD sysmem_locations = WINED3D_LOCATION_SYSMEM | WINED3D_LOCATION_USER
-            | WINED3D_LOCATION_DIB;
+            | WINED3D_LOCATION_DIB | WINED3D_LOCATION_BUFFER;
 
     if (surface->resource.locations & WINED3D_LOCATION_DISCARDED)
     {
@@ -4784,6 +4815,7 @@ static void wined3d_surface_load_location(struct wined3d_resource *resource,
 
     switch (location)
     {
+        case WINED3D_LOCATION_BUFFER:
         case WINED3D_LOCATION_SYSMEM:
         case WINED3D_LOCATION_USER:
         case WINED3D_LOCATION_DIB:
