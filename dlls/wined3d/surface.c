@@ -511,30 +511,6 @@ static void surface_force_reload(struct wined3d_surface *surface)
     surface->flags &= ~(SFLAG_ALLOCATED | SFLAG_SRGBALLOCATED);
 }
 
-static void surface_release_client_storage(struct wined3d_surface *surface)
-{
-    struct wined3d_context *context = context_acquire(surface->resource.device, NULL);
-    const struct wined3d_gl_info *gl_info = context->gl_info;
-
-    if (surface->container->texture_rgb.name)
-    {
-        wined3d_texture_bind_and_dirtify(surface->container, context, FALSE);
-        gl_info->gl_ops.gl.p_glTexImage2D(surface->texture_target, surface->texture_level,
-                GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
-    }
-    if (surface->container->texture_srgb.name)
-    {
-        wined3d_texture_bind_and_dirtify(surface->container, context, TRUE);
-        gl_info->gl_ops.gl.p_glTexImage2D(surface->texture_target, surface->texture_level,
-                GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
-    }
-
-    context_release(context);
-
-    wined3d_resource_invalidate_location(&surface->resource, WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB);
-    surface_force_reload(surface);
-}
-
 static HRESULT surface_private_setup(struct wined3d_surface *surface)
 {
     /* TODO: Check against the maximum texture sizes supported by the video card. */
@@ -2084,12 +2060,11 @@ static void surface_allocate_surface(struct wined3d_surface *surface, const stru
 
     if (gl_info->supported[APPLE_CLIENT_STORAGE])
     {
-        if (surface->flags & (SFLAG_NONPOW2 | SFLAG_DIBSECTION | SFLAG_CONVERTED)
+        if (surface->flags & (SFLAG_NONPOW2 | SFLAG_CONVERTED)
                 || !wined3d_resource_prepare_system_memory(&surface->resource))
         {
             /* In some cases we want to disable client storage.
              * SFLAG_NONPOW2 has a bigger opengl texture than the client memory, and different pitches
-             * SFLAG_DIBSECTION: Dibsections may have read / write protections on the memory. Avoid issues...
              * SFLAG_CONVERTED: The conversion destination memory is freed after loading the surface
              */
             surface->flags &= ~SFLAG_CLIENT;
@@ -3115,14 +3090,6 @@ HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
     /* Create a DIB section if there isn't a dc yet. */
     if (!surface->hDC)
     {
-        if (surface->flags & SFLAG_CLIENT)
-        {
-            struct wined3d_context *context = context_acquire(surface->resource.device, NULL);
-            wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
-            context_release(context);
-            surface_release_client_storage(surface);
-        }
-
         if (!wined3d_surface_prepare_dib(&surface->resource))
             return WINED3DERR_INVALIDCALL;
         if ((!(surface->flags & SFLAG_PIN_SYSMEM))
