@@ -612,8 +612,7 @@ static void surface_realize_palette(struct wined3d_surface *surface)
 
     context = context_acquire(surface->resource.device, NULL);
 
-    if ((surface->resource.format->id == WINED3DFMT_P8_UINT
-            || surface->resource.format->id == WINED3DFMT_P8_UINT_A8_UNORM)
+    if (surface->resource.format->flags & WINED3DFMT_FLAG_PALETTE
             && !(surface->resource.locations & WINED3D_LOCATION_DISCARDED))
     {
         if (surface->resource.usage & WINED3DUSAGE_RENDERTARGET)
@@ -3105,8 +3104,7 @@ HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
 
     wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_DIB);
 
-    if (surface->resource.format->id == WINED3DFMT_P8_UINT
-            || surface->resource.format->id == WINED3DFMT_P8_UINT_A8_UNORM)
+    if (surface->resource.format->flags & WINED3DFMT_FLAG_PALETTE)
     {
         /* GetDC on palettized formats is unsupported in D3D9, and the method
          * is missing in D3D8, so this should only be used for DX <=7
@@ -4232,8 +4230,7 @@ static HRESULT surface_blt_special(struct wined3d_surface *dst_surface, const RE
         BOOL stretchx;
 
         /* P8 read back is not implemented */
-        if (src_surface->resource.format->id == WINED3DFMT_P8_UINT
-                || dst_surface->resource.format->id == WINED3DFMT_P8_UINT)
+        if (src_surface->resource.format->flags & WINED3DFMT_FLAG_PALETTE)
         {
             TRACE("P8 read back not supported by frame buffer to texture blit\n");
             return WINED3DERR_INVALIDCALL;
