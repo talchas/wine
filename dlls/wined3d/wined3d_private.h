@@ -2041,6 +2041,7 @@ struct wined3d_resource
     void *heap_memory;
     void *user_memory;
     void *dib_memory;
+    BOOL unmap_dirtify;
     GLuint buffer_object;
     UINT custom_row_pitch, custom_slice_pitch;
 
