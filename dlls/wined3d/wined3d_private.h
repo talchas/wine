@@ -2038,6 +2038,7 @@ struct wined3d_resource
     struct list privateData;
     struct list resource_list_entry;
     LONG access_fence;
+    BOOL unmap_dirtify;
 
     DWORD locations, map_binding;
 
