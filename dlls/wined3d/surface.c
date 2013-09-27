@@ -509,6 +509,7 @@ static void surface_evict_sysmem(struct wined3d_surface *surface)
         return;
 
     wined3d_resource_free_sysmem(&surface->resource);
+    surface->resource.map_heap_memory = NULL;
     wined3d_resource_invalidate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
 }
 
@@ -2723,6 +2724,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
 
     surface->resource.locations = WINED3D_LOCATION_DISCARDED;
     wined3d_resource_free_sysmem(&surface->resource);
+    surface->resource.map_heap_memory = NULL;
 
     surface->resource.width = width;
     surface->resource.height = height;
