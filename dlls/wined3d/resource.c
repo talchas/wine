@@ -164,6 +164,16 @@ static void wined3d_resource_free_bo(struct wined3d_resource *resource)
     context_release(context);
 }
 
+void wined3d_resource_cleanup_cs(struct wined3d_resource *resource)
+{
+    if (resource->buffer)
+        wined3d_resource_free_bo(resource);
+
+    wined3d_resource_free_sysmem(resource);
+    resource->allocatedMemory = NULL;
+    resource->map_heap_memory = NULL;
+}
+
 void resource_cleanup(struct wined3d_resource *resource)
 {
     const struct wined3d *d3d = resource->device->wined3d;
@@ -187,12 +197,7 @@ void resource_cleanup(struct wined3d_resource *resource)
             ERR("Failed to free private data when destroying resource %p, hr = %#x.\n", resource, hr);
     }
 
-    if (resource->buffer)
-        wined3d_resource_free_bo(resource);
-
-    wined3d_resource_free_sysmem(resource);
-    resource->allocatedMemory = NULL;
-    resource->map_heap_memory = NULL;
+    wined3d_cs_emit_resource_cleanup(resource->device->cs, resource);
 
     device_resource_released(resource->device, resource);
 }
