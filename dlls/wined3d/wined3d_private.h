@@ -2000,9 +2000,11 @@ struct wined3d_resource
     UINT size;
     DWORD priority;
     BYTE *allocatedMemory; /* Pointer to the real data location */
-    void *heap_memory;
     struct list privateData;
     struct list resource_list_entry;
+
+    DWORD locations;
+    void *heap_memory;
 
     void *parent;
     const struct wined3d_parent_ops *parent_ops;
@@ -2131,7 +2133,7 @@ struct wined3d_volume
     struct wined3d_resource resource;
     struct wined3d_texture *container;
 
-    DWORD flags, locations;
+    DWORD flags;
     GLint texture_level;
     DWORD download_count;
     GLuint pbo;
