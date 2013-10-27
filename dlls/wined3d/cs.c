@@ -592,6 +592,13 @@ static void wined3d_cs_surface_inc_fence(struct wined3d_surface *surface)
         wined3d_resource_inc_fence(&surface->resource);
 }
 
+static void signal_sleep_lock(struct wined3d_cs *cs)
+{
+    LeaveCriticalSection(&cs->sleep_lock);
+    while (cs->main_thread_wait);
+    EnterCriticalSection(&cs->sleep_lock);
+}
+
 static UINT wined3d_cs_exec_present(struct wined3d_cs *cs, const void *data)
 {
     const struct wined3d_cs_present *op = data;
@@ -609,6 +616,9 @@ static UINT wined3d_cs_exec_present(struct wined3d_cs *cs, const void *data)
             cs->state.fb.depth_stencil);
 
     InterlockedDecrement(&cs->pending_presents);
+
+    if (cs->main_thread_wait == WINED3D_WAIT_PRESENT)
+        signal_sleep_lock(cs);
 
     wined3d_cs_surface_dec_fence(swapchain->front_buffer);
     for (i = 0; i < swapchain->desc.backbuffer_count; i++)
@@ -655,8 +665,24 @@ void wined3d_cs_emit_present(struct wined3d_cs *cs, struct wined3d_swapchain *sw
 
     cs->ops->submit(cs, sizeof(*op));
 
-    while (pending > 1)
+    if (pending > 1)
+    {
+        InterlockedExchange(&cs->main_thread_wait, WINED3D_WAIT_PRESENT);
+
+        /* The worker thread might have finished a present operation between
+         * the initial check and us setting main_thread_wait. Re-check it. */
         pending = InterlockedCompareExchange(&cs->pending_presents, 0, 0);
+        if (pending > 1)
+        {
+            EnterCriticalSection(&cs->sleep_lock);
+            InterlockedExchange(&cs->main_thread_wait, 0);
+            LeaveCriticalSection(&cs->sleep_lock);
+        }
+        else
+        {
+            InterlockedExchange(&cs->main_thread_wait, 0);
+        }
+    }
 }
 
 static UINT wined3d_cs_exec_clear(struct wined3d_cs *cs, const void *data)
@@ -2558,6 +2584,25 @@ static UINT (* const wined3d_cs_op_handlers[])(struct wined3d_cs *cs, const void
     /* WINED3D_CS_OP_DELETE_GL_CONTEXTS     */ wined3d_cs_exec_delete_gl_contexts,
 };
 
+static inline BOOL queue_has_space(struct wined3d_cs_queue *queue, size_t size)
+{
+    LONG head = queue->head;
+    LONG tail = *((volatile LONG *)&queue->tail);
+    LONG new_pos;
+    /* Empty */
+    if (head == tail)
+        return TRUE;
+    /* Head ahead of tail, take care of wrap-around */
+    new_pos = (head + size) & (WINED3D_CS_QUEUE_SIZE - 1);
+    if (head > tail && (new_pos || tail))
+        return TRUE;
+    /* Tail ahead of head, but still enough space */
+    if (new_pos < tail && new_pos)
+        return TRUE;
+
+    return FALSE;
+}
+
 static inline void *_wined3d_cs_mt_require_space(struct wined3d_cs *cs, size_t size, BOOL prio)
 {
     struct wined3d_cs_queue *queue = prio ? &cs->prio_queue : &cs->queue;
@@ -2587,24 +2632,24 @@ static inline void *_wined3d_cs_mt_require_space(struct wined3d_cs *cs, size_t s
         assert(!queue->head);
     }
 
-    while(1)
+    /* After a critical section wait we have to check again because although
+     * we know that additional space is available, we still don't know if
+     * enough space is available. */
+    while (!queue_has_space(queue, size))
     {
-        LONG head = queue->head;
-        LONG tail = *((volatile LONG *)&queue->tail);
-        LONG new_pos;
-        /* Empty */
-        if (head == tail)
-            break;
-        /* Head ahead of tail, take care of wrap-around */
-        new_pos = (head + size) & (WINED3D_CS_QUEUE_SIZE - 1);
-        if (head > tail && (new_pos || tail))
-            break;
-        /* Tail ahead of head, but still enough space */
-        if (new_pos < tail && new_pos)
-            break;
+        TRACE("Waiting for free space.\n");
 
-        TRACE("Waiting for free space. Head %u, tail %u, want %u\n", head, tail,
-                (unsigned int) size);
+        InterlockedExchange(&cs->main_thread_wait, WINED3D_WAIT_SPACE);
+        if (!queue_has_space(queue, size))
+        {
+            EnterCriticalSection(&cs->sleep_lock);
+            InterlockedExchange(&cs->main_thread_wait, 0);
+            LeaveCriticalSection(&cs->sleep_lock);
+        }
+        else
+        {
+            InterlockedExchange(&cs->main_thread_wait, 0);
+        }
     }
 
     return &queue->data[queue->head];
@@ -2837,6 +2882,9 @@ static DWORD WINAPI wined3d_cs_run(void *thread_param)
         tail += wined3d_cs_op_handlers[opcode](cs, &queue->data[tail]);
         tail &= (WINED3D_CS_QUEUE_SIZE - 1);
         InterlockedExchange(&queue->tail, tail);
+
+        if (cs->main_thread_wait == WINED3D_WAIT_SPACE)
+            signal_sleep_lock(cs);
     }
 
 done:
@@ -2867,9 +2915,14 @@ struct wined3d_cs *wined3d_cs_create(struct wined3d_device *device)
 
         cs->event = CreateEventW(NULL, FALSE, FALSE, NULL);
 
+        InitializeCriticalSection(&cs->sleep_lock);
+        EnterCriticalSection(&cs->sleep_lock);
+
         if (!(cs->thread = CreateThread(NULL, 0, wined3d_cs_run, cs, 0, NULL)))
         {
             ERR("Failed to create wined3d command stream thread.\n");
+            LeaveCriticalSection(&cs->sleep_lock);
+            DeleteCriticalSection(&cs->sleep_lock);
             goto err;
         }
     }
@@ -2897,6 +2950,10 @@ void wined3d_cs_destroy(struct wined3d_cs *cs)
         CloseHandle(cs->thread);
         if (ret != WAIT_OBJECT_0)
             ERR("Wait failed (%#x).\n", ret);
+
+        LeaveCriticalSection(&cs->sleep_lock);
+        DeleteCriticalSection(&cs->sleep_lock);
+
         if (!CloseHandle(cs->event))
             ERR("Closing event failed.\n");
     }

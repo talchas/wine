@@ -2548,6 +2548,9 @@ struct wined3d_cs_ops
     void (*finish_prio)(struct wined3d_cs *cs);
 };
 
+#define WINED3D_WAIT_PRESENT    1
+#define WINED3D_WAIT_SPACE      2
+
 struct wined3d_cs
 {
     const struct wined3d_cs_ops *ops;
@@ -2564,6 +2567,8 @@ struct wined3d_cs
 
     HANDLE event;
     BOOL waiting_for_event;
+    CRITICAL_SECTION sleep_lock;
+    volatile LONG main_thread_wait;
 };
 
 struct wined3d_cs *wined3d_cs_create(struct wined3d_device *device) DECLSPEC_HIDDEN;
