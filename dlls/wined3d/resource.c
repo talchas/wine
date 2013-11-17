@@ -463,6 +463,9 @@ DWORD wined3d_resource_access_from_location(DWORD location)
         case WINED3D_LOCATION_BUFFER:
         case WINED3D_LOCATION_TEXTURE_RGB:
         case WINED3D_LOCATION_TEXTURE_SRGB:
+        case WINED3D_LOCATION_DRAWABLE:
+        case WINED3D_LOCATION_RB_MULTISAMPLE:
+        case WINED3D_LOCATION_RB_RESOLVED:
             return WINED3D_RESOURCE_ACCESS_GPU;
 
         default:
