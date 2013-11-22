@@ -2039,7 +2039,6 @@ void wined3d_resource_invalidate_location(struct wined3d_resource *resource,
         DWORD location) DECLSPEC_HIDDEN;
 void wined3d_resource_load_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location) DECLSPEC_HIDDEN;
-DWORD wined3d_resource_access_from_location(DWORD location) DECLSPEC_HIDDEN;
 BYTE *wined3d_resource_get_map_ptr(const struct wined3d_resource *resource,
         const struct wined3d_context *context, DWORD flags) DECLSPEC_HIDDEN;
 void wined3d_resource_release_map_ptr(const struct wined3d_resource *resource,

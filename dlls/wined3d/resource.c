@@ -468,7 +468,7 @@ void wined3d_resource_invalidate_location(struct wined3d_resource *resource, DWO
     resource->resource_ops->resource_location_invalidated(resource, location);
 }
 
-DWORD wined3d_resource_access_from_location(DWORD location)
+static DWORD wined3d_resource_access_from_location(DWORD location)
 {
     switch (location)
     {
@@ -597,7 +597,7 @@ void wined3d_resource_load_location(struct wined3d_resource *resource,
 
     /* Keep this a WARN for now until surfaces are cleaned up. */
     if ((resource->access_flags & required_access) != required_access)
-        WARN("Operation requires %#x access, but resource only has %#x.\n",
+        ERR("Operation requires %#x access, but resource only has %#x.\n",
                 required_access, resource->access_flags);
 
     if (location & basic_locations)

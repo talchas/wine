@@ -206,17 +206,9 @@ static void wined3d_volume_load_location(struct wined3d_resource *resource,
         struct wined3d_context *context, DWORD location)
 {
     struct wined3d_volume *volume = volume_from_resource(resource);
-    DWORD required_access = wined3d_resource_access_from_location(location);
 
     TRACE("Volume %p, loading %s, have %s.\n", volume, wined3d_debug_location(location),
         wined3d_debug_location(volume->resource.locations));
-
-    if ((volume->resource.access_flags & required_access) != required_access)
-    {
-        ERR("Operation requires %#x access, but volume only has %#x.\n",
-                required_access, volume->resource.access_flags);
-        return;
-    }
 
     switch (location)
     {
