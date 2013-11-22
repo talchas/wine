@@ -1317,8 +1317,9 @@ void surface_set_texture_target(struct wined3d_surface *surface, GLenum target, 
 /* This call just downloads data, the caller is responsible for binding the
  * correct texture. */
 /* Context activation is done by the caller. */
-static void surface_download_data(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info,
-        const struct wined3d_bo_address *data)
+static void surface_download_data(struct wined3d_surface *surface, const RECT *src_rect,
+        const struct wined3d_gl_info *gl_info, const struct wined3d_bo_address *data,
+        const POINT *dst_point, UINT dst_pitch)
 {
     const struct wined3d_format *format = surface->resource.format;
 
@@ -1329,16 +1330,20 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
         return;
     }
 
-    if (data->buffer_object)
-    {
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, data->buffer_object));
-        checkGLcall("glBindBufferARB");
-    }
-
     if (format->flags & WINED3DFMT_FLAG_COMPRESSED)
     {
         TRACE("(%p) : Calling glGetCompressedTexImageARB level %d, format %#x, type %#x, data %p.\n",
                 surface, surface->texture_level, format->glFormat, format->glType, data->addr);
+        if (!surface_is_full_rect(surface, src_rect))
+            FIXME("Partial download of compressed surfaces not implemented.\n");
+        if(dst_point->x ||dst_point->y)
+            FIXME("Offset download of compressed surfaces not implemented.\n");
+
+        if (data->buffer_object)
+        {
+            GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, data->buffer_object));
+            checkGLcall("glBindBufferARB");
+        }
 
         GL_EXTCALL(glGetCompressedTexImageARB(surface->texture_target,
                 surface->texture_level, data->addr));
@@ -1350,7 +1355,6 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
         GLenum gl_format = format->glFormat;
         GLenum gl_type = format->glType;
         UINT src_pitch = 0;
-        UINT dst_row_pitch, dst_slice_pitch;
 
         /* In case of P8 the index is stored in the alpha component if the primary render target uses P8. */
         if (format->id == WINED3DFMT_P8_UINT && swapchain_is_p8(surface->resource.device->swapchains[0]))
@@ -1359,19 +1363,25 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
             gl_type = GL_UNSIGNED_BYTE;
         }
 
-        if (surface->flags & SFLAG_NONPOW2)
+        if (surface->flags & SFLAG_NONPOW2 || !surface_is_full_rect(surface, src_rect))
         {
             unsigned char alignment = surface->resource.device->surface_alignment;
             src_pitch = format->byte_count * surface->pow2Width;
-            wined3d_resource_get_pitch(&surface->resource, &dst_row_pitch, &dst_slice_pitch);
             src_pitch = (src_pitch + alignment - 1) & ~(alignment - 1);
             mem = HeapAlloc(GetProcessHeap(), 0, src_pitch * surface->pow2Height);
-
-            if (data->buffer_object)
-                ERR("Attempting to download a SFLAG_NONPOW2 texture with a PBO\n");
         }
         else
         {
+            if (data->buffer_object)
+            {
+                GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, data->buffer_object));
+                checkGLcall("glBindBufferARB");
+            }
+
+            glPixelStorei(GL_PACK_SKIP_PIXELS, dst_point->x);
+            glPixelStorei(GL_PACK_SKIP_ROWS, dst_point->y);
+            glPixelStorei(GL_PACK_ROW_LENGTH, dst_pitch / format->byte_count);
+            checkGLcall("Set pack parameters");
             mem = data->addr;
         }
 
@@ -1382,11 +1392,11 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
                 gl_format, gl_type, mem);
         checkGLcall("glGetTexImage");
 
-        if (surface->flags & SFLAG_NONPOW2)
+        if (surface->flags & SFLAG_NONPOW2 || !surface_is_full_rect(surface, src_rect))
         {
             const BYTE *src_data;
             BYTE *dst_data;
-            UINT y;
+            UINT y, copy_height, copy_width;
             /*
              * Some games (e.g. warhammer 40k) don't work properly with the odd pitches, preventing
              * the surface pitch from being used to box non-power2 textures. Instead we have to use a hack to
@@ -1437,17 +1447,50 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
              * rendering. If an app does, the SFLAG_DYNLOCK flag will kick in and the memory copy won't be released,
              * and doesn't have to be re-read. */
             src_data = mem;
-            dst_data = data->addr;
-            TRACE("(%p) : Repacking the surface data from pitch %d to pitch %d\n", surface, src_pitch, dst_row_pitch);
-            for (y = 0; y < surface->resource.height; ++y)
+
+            if (data->buffer_object)
             {
-                memcpy(dst_data, src_data, dst_row_pitch);
+                BYTE *map;
+                GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0));
+                map = GL_EXTCALL(glMapBufferARB(GL_PIXEL_PACK_BUFFER_ARB, GL_WRITE_ONLY));
+                checkGLcall("Map PBO");
+                dst_data = map + (unsigned long)data->addr;
+            }
+            else
+            {
+                dst_data = data->addr;
+            }
+            TRACE("(%p) : Repacking the surface data from pitch %d to pitch %d, rect %s, point %s\n",
+                    surface, src_pitch, dst_pitch, wine_dbgstr_rect(src_rect), wine_dbgstr_point(dst_point));
+
+            src_data += src_rect->top * src_pitch;
+            src_data += src_rect->left * format->byte_count;
+            copy_width = src_rect->right - src_rect->left;
+            copy_height = src_rect->bottom - src_rect->top;
+
+            dst_data += dst_point->x * format->byte_count;
+            dst_data += dst_point->y * dst_pitch;
+
+            for (y = 0; y < copy_height; ++y)
+            {
+                memcpy(dst_data, src_data, copy_width * format->byte_count);
                 src_data += src_pitch;
-                dst_data += dst_row_pitch;
+                dst_data += dst_pitch;
             }
 
             HeapFree(GetProcessHeap(), 0, mem);
+
+            if (data->buffer_object)
+            {
+                GL_EXTCALL(glUnmapBufferARB(GL_PIXEL_PACK_BUFFER_ARB));
+                checkGLcall("glUnmapBufferARB(GL_PIXEL_PACK_BUFFER_ARB)");
+            }
         }
+
+        glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        checkGLcall("Unset pack parameters");
     }
 
     if (data->buffer_object)
@@ -4630,10 +4673,15 @@ static void surface_load_sysmem(struct wined3d_surface *surface,
     if (surface->resource.locations & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB))
     {
         struct wined3d_bo_address dst;
+        UINT row_pitch, slice_pitch;
+        const RECT src_rect = {0, 0, surface->resource.width, surface->resource.height};
+        const POINT dst_point = {0, 0};
+
         wined3d_resource_get_memory(&surface->resource, dst_location, &dst);
+        wined3d_resource_get_pitch(&surface->resource, &row_pitch, &slice_pitch);
         wined3d_texture_bind_and_dirtify(surface->container, context,
                 !(surface->resource.locations & WINED3D_LOCATION_TEXTURE_RGB));
-        surface_download_data(surface, gl_info, &dst);
+        surface_download_data(surface, &src_rect, gl_info, &dst, &dst_point, row_pitch);
         return;
     }
 
@@ -5690,11 +5738,13 @@ static HRESULT cpu_blit_depth_fill(struct wined3d_device *device,
     return WINED3DERR_INVALIDCALL;
 }
 
-static void surface_download_to_surface(struct wined3d_surface *dst, struct wined3d_surface *src)
+static void surface_download_to_surface(struct wined3d_surface *dst, struct wined3d_surface *src,
+        const POINT *dst_point, const RECT *src_rect)
 {
     struct wined3d_device *device = dst->resource.device;
     struct wined3d_context *context = context_acquire(device, NULL);
     struct wined3d_bo_address data;
+    UINT row_pitch, slice_pitch;
 
     if (src->resource.locations & WINED3D_LOCATION_TEXTURE_SRGB)
     {
@@ -5710,8 +5760,9 @@ static void surface_download_to_surface(struct wined3d_surface *dst, struct wine
     /* We always write to the full surface */
     wined3d_resource_validate_location(&dst->resource, dst->resource.map_binding);
     wined3d_resource_get_memory(&dst->resource, dst->resource.map_binding, &data);
+    wined3d_resource_get_pitch(&dst->resource, &row_pitch, &slice_pitch);
 
-    surface_download_data(src, context->gl_info, &data);
+    surface_download_data(src, src_rect, context->gl_info, &data, dst_point, row_pitch);
 
     wined3d_resource_invalidate_location(&dst->resource, ~dst->resource.map_binding);
 
@@ -5982,12 +6033,10 @@ HRESULT CDECL wined3d_surface_blt(struct wined3d_surface *dst_surface, const REC
                     TRACE("Not doing download because of scaling.\n");
                 else if (convert)
                     TRACE("Not doing download because of format conversion.\n");
-                else if (!surface_is_full_rect(src_surface, &src_rect)
-                        || !surface_is_full_rect(dst_surface, &dst_rect))
-                    FIXME("Not doing download because of size mismatch.\n");
                 else
                 {
-                    surface_download_to_surface(dst_surface, src_surface);
+                    POINT dst_point = {dst_rect.left, dst_rect.top};
+                    surface_download_to_surface(dst_surface, src_surface, &dst_point, &src_rect);
                     return WINED3D_OK;
                 }
             }
