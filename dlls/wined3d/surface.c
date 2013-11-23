@@ -3093,6 +3093,8 @@ HRESULT CDECL wined3d_surface_map(struct wined3d_surface *surface,
 {
     const struct wined3d_format *format = surface->resource.format;
     BYTE *base_memory;
+    struct wined3d_device *device = surface->resource.device;
+    struct wined3d_context *context = NULL;
 
     TRACE("surface %p, map_desc %p, rect %s, flags %#x.\n",
             surface, map_desc, wine_dbgstr_rect(rect), flags);
@@ -3131,31 +3133,28 @@ HRESULT CDECL wined3d_surface_map(struct wined3d_surface *surface,
         }
     }
 
-    surface_prepare_system_memory(surface);
+    if (device->d3d_initialized)
+        context = context_acquire(device, NULL);
+
+    wined3d_resource_prepare_map_memory(&surface->resource, context);
     if (flags & WINED3D_MAP_DISCARD)
     {
         TRACE("WINED3D_MAP_DISCARD flag passed, marking SYSMEM as up to date.\n");
-        wined3d_resource_validate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
+        wined3d_resource_validate_location(&surface->resource, surface->resource.map_binding);
     }
     else
     {
-        struct wined3d_device *device = surface->resource.device;
-        struct wined3d_context *context = NULL;
-
         if (surface->resource.usage & WINED3DUSAGE_DYNAMIC)
             WARN_(d3d_perf)("Mapping a dynamic surface without WINED3D_MAP_DISCARD.\n");
 
-        if (device->d3d_initialized)
-            context = context_acquire(device, NULL);
-
-        wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
-
-        if (device->d3d_initialized)
-            context_release(context);
+        wined3d_resource_load_location(&surface->resource, context, surface->resource.map_binding);
     }
 
+    if (context)
+        context_release(context);
+
     if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
-        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
+        wined3d_resource_invalidate_location(&surface->resource, ~surface->resource.map_binding);
 
     switch (surface->resource.map_binding)
     {
