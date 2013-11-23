@@ -2263,8 +2263,8 @@ void surface_load(struct wined3d_surface *surface, struct wined3d_context *conte
         /* To perform the color key conversion we need a sysmem copy of
          * the surface. Make sure we have it. */
 
-        wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
-        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
+        wined3d_resource_load_location(&surface->resource, context, surface->resource.map_binding);
+        wined3d_resource_invalidate_location(&surface->resource, ~surface->resource.map_binding);
         /* Switching color keying on / off may change the internal format. */
         if (ck_changed)
             surface_force_reload(surface);
