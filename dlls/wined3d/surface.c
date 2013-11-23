@@ -4834,22 +4834,22 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     /* Upload from system memory */
     if (srgb)
     {
-        if ((surface->resource.locations & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_SYSMEM))
+        if ((surface->resource.locations & (WINED3D_LOCATION_TEXTURE_RGB | surface->resource.map_binding))
                 == WINED3D_LOCATION_TEXTURE_RGB)
         {
             /* Performance warning... */
             FIXME("Downloading RGB surface %p to reload it as sRGB.\n", surface);
-            wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
+            wined3d_resource_load_location(&surface->resource, context, surface->resource.map_binding);
         }
     }
     else
     {
-        if ((surface->resource.locations & (WINED3D_LOCATION_TEXTURE_SRGB | WINED3D_LOCATION_SYSMEM))
+        if ((surface->resource.locations & (WINED3D_LOCATION_TEXTURE_SRGB | surface->resource.map_binding))
                 == WINED3D_LOCATION_TEXTURE_SRGB)
         {
             /* Performance warning... */
             FIXME("Downloading sRGB surface %p to reload it as RGB.\n", surface);
-            wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
+            wined3d_resource_load_location(&surface->resource, context, surface->resource.map_binding);
         }
     }
 
