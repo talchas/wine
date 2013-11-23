@@ -672,13 +672,13 @@ static void surface_realize_palette(struct wined3d_surface *surface)
         }
         else
         {
-            if (!(surface->resource.locations & WINED3D_LOCATION_SYSMEM))
+            if (!(surface->resource.locations & surface->resource.map_binding))
             {
                 TRACE("Palette changed with surface that does not have an up to date system memory copy.\n");
-                surface_prepare_system_memory(surface);
-                wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
+                wined3d_resource_prepare_map_memory(&surface->resource, context);
+                wined3d_resource_load_location(&surface->resource, context, surface->resource.map_binding);
             }
-            wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
+            wined3d_resource_invalidate_location(&surface->resource, ~surface->resource.map_binding);
         }
     }
 
