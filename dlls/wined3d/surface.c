@@ -1699,8 +1699,9 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
     }
 }
 
-static HRESULT d3dfmt_get_conv(const struct wined3d_surface *surface, BOOL need_alpha_ck, BOOL use_texturing,
-        struct wined3d_format *format, enum wined3d_conversion_type *conversion_type)
+static HRESULT d3dfmt_get_conv(const struct wined3d_surface *surface, const struct wined3d_format *src_format,
+        BOOL need_alpha_ck, BOOL use_texturing, struct wined3d_format *format,
+        enum wined3d_conversion_type *conversion_type)
 {
     BOOL colorkey_active = need_alpha_ck && (surface->container->color_key_flags & WINEDDSD_CKSRCBLT);
     const struct wined3d_device *device = surface->resource.device;
@@ -1709,11 +1710,11 @@ static HRESULT d3dfmt_get_conv(const struct wined3d_surface *surface, BOOL need_
 
     /* Copy the default values from the surface. Below we might perform fixups */
     /* TODO: get rid of color keying desc fixups by using e.g. a table. */
-    *format = *surface->resource.format;
+    *format = *src_format;
     *conversion_type = WINED3D_CT_NONE;
 
     /* Ok, now look if we have to do any conversion */
-    switch (surface->resource.format->id)
+    switch (src_format->id)
     {
         case WINED3DFMT_P8_UINT:
             /* Below the call to blit_supported is disabled for Wine 1.2
@@ -2003,14 +2004,19 @@ static HRESULT d3dfmt_convert_surface(const BYTE *src, BYTE *dst, UINT pitch, UI
  * correct texture. */
 /* Context activation is done by the caller. */
 static void surface_upload_data(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info,
-        const struct wined3d_format *format, const RECT *src_rect, UINT src_pitch, const POINT *dst_point,
+        const struct wined3d_format *src_format, const RECT *src_rect, UINT src_pitch, const POINT *dst_point,
         BOOL srgb, const struct wined3d_bo_address *data)
 {
     UINT update_w = src_rect->right - src_rect->left;
     UINT update_h = src_rect->bottom - src_rect->top;
+    BYTE *mem, *conv_dst = NULL;
+    enum wined3d_conversion_type convert;
+    const struct wined3d_device *device = surface->resource.device;
+    struct wined3d_format conv_format;
+    BOOL adjust_initial_offset = TRUE;
 
     TRACE("surface %p, gl_info %p, format %s, src_rect %s, src_pitch %u, dst_point %s, srgb %#x, data {%#x:%p}.\n",
-            surface, gl_info, debug_d3dformat(format->id), wine_dbgstr_rect(src_rect), src_pitch,
+            surface, gl_info, debug_d3dformat(src_format->id), wine_dbgstr_rect(src_rect), src_pitch,
             wine_dbgstr_point(dst_point), srgb, data->buffer_object, data->addr);
 
     if (surface->resource.map_count)
@@ -2019,10 +2025,10 @@ static void surface_upload_data(struct wined3d_surface *surface, const struct wi
         surface->flags |= SFLAG_PIN_SYSMEM;
     }
 
-    if (format->flags & WINED3DFMT_FLAG_HEIGHT_SCALE)
+    if (src_format->flags & WINED3DFMT_FLAG_HEIGHT_SCALE)
     {
-        update_h *= format->height_scale.numerator;
-        update_h /= format->height_scale.denominator;
+        update_h *= src_format->height_scale.numerator;
+        update_h /= src_format->height_scale.denominator;
     }
 
     if (data->buffer_object)
@@ -2031,31 +2037,75 @@ static void surface_upload_data(struct wined3d_surface *surface, const struct wi
         checkGLcall("glBindBufferARB");
     }
 
-    if (format->flags & WINED3DFMT_FLAG_COMPRESSED)
+    d3dfmt_get_conv(surface, src_format, TRUE /* We need color keying */,
+            TRUE /* We will use textures */, &conv_format, &convert);
+    if (conv_format.convert || convert != WINED3D_CT_NONE)
     {
-        UINT row_length = wined3d_format_calculate_size(format, 1, update_w, 1, 1);
-        UINT row_count = (update_h + format->block_height - 1) / format->block_height;
-        const BYTE *addr = data->addr;
+        DWORD conv_dst_pitch;
+        BYTE *conv_src = data->addr;
+
+        if (data->buffer_object)
+            ERR("Attempting to load a converted surface from a PBO.\n");
+        if (conv_format.flags & WINED3DFMT_FLAG_COMPRESSED)
+            ERR("Converting a compressed format.\n");
+
+        conv_src += src_rect->top * src_pitch;
+        conv_src += src_rect->left * src_format->byte_count;
+
+        /* Stick to the alignment for the converted surface too, makes it easier to load the surface */
+        conv_dst_pitch = update_w * conv_format.conv_byte_count;
+        conv_dst_pitch = (conv_dst_pitch + device->surface_alignment - 1) & ~(device->surface_alignment - 1);
+
+        if (!(conv_dst = HeapAlloc(GetProcessHeap(), 0, conv_dst_pitch * update_h)))
+        {
+            ERR("Out of memory (%u).\n", conv_dst_pitch * update_h);
+            return;
+        }
+
+        if (convert != WINED3D_CT_NONE)
+            d3dfmt_convert_surface(conv_src, conv_dst, src_pitch,
+                    update_w, update_h, conv_dst_pitch, convert, surface);
+        else
+            conv_format.convert(conv_src, conv_dst, src_pitch, src_pitch * update_h,
+                    conv_dst_pitch, conv_dst_pitch * update_h, update_w, update_h, 1);
+
+        conv_format.byte_count = conv_format.conv_byte_count;
+        src_pitch = conv_dst_pitch;
+        mem = conv_dst;
+        adjust_initial_offset = FALSE;
+    }
+    else
+    {
+        mem = data->addr;
+    }
+
+    if (conv_format.flags & WINED3DFMT_FLAG_COMPRESSED)
+    {
+        UINT row_length = wined3d_format_calculate_size(&conv_format, 1, update_w, 1, 1);
+        UINT row_count = (update_h + conv_format.block_height - 1) / conv_format.block_height;
         GLenum internal;
 
-        addr += (src_rect->top / format->block_height) * src_pitch;
-        addr += (src_rect->left / format->block_width) * format->block_byte_count;
+        if (adjust_initial_offset)
+        {
+            mem += (src_rect->top / conv_format.block_height) * src_pitch;
+            mem += (src_rect->left / conv_format.block_width) * conv_format.block_byte_count;
+        }
 
         if (srgb)
-            internal = format->glGammaInternal;
+            internal = conv_format.glGammaInternal;
         else if (surface->resource.usage & WINED3DUSAGE_RENDERTARGET && surface_is_offscreen(surface))
-            internal = format->rtInternal;
+            internal = conv_format.rtInternal;
         else
-            internal = format->glInternal;
+            internal = conv_format.glInternal;
 
         TRACE("glCompressedTexSubImage2DARB, target %#x, level %d, x %d, y %d, w %d, h %d, "
                 "format %#x, image_size %#x, addr %p.\n", surface->texture_target, surface->texture_level,
-                dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, addr);
+                dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, mem);
 
         if (row_length == src_pitch)
         {
             GL_EXTCALL(glCompressedTexSubImage2DARB(surface->texture_target, surface->texture_level,
-                    dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, addr));
+                    dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, mem));
         }
         else
         {
@@ -2066,27 +2116,28 @@ static void surface_upload_data(struct wined3d_surface *surface, const struct wi
             for (row = 0, y = dst_point->y; row < row_count; ++row)
             {
                 GL_EXTCALL(glCompressedTexSubImage2DARB(surface->texture_target, surface->texture_level,
-                        dst_point->x, y, update_w, format->block_height, internal, row_length, addr));
-                y += format->block_height;
-                addr += src_pitch;
+                        dst_point->x, y, update_w, conv_format.block_height, internal, row_length, mem));
+                y += conv_format.block_height;
+                mem += src_pitch;
             }
         }
         checkGLcall("glCompressedTexSubImage2DARB");
     }
     else
     {
-        const BYTE *addr = data->addr;
-
-        addr += src_rect->top * src_pitch;
-        addr += src_rect->left * format->byte_count;
+        if (adjust_initial_offset)
+        {
+            mem += src_rect->top * src_pitch;
+            mem += src_rect->left * conv_format.byte_count;
+        }
 
         TRACE("glTexSubImage2D, target %#x, level %d, x %d, y %d, w %d, h %d, format %#x, type %#x, addr %p.\n",
                 surface->texture_target, surface->texture_level, dst_point->x, dst_point->y,
-                update_w, update_h, format->glFormat, format->glType, addr);
+                update_w, update_h, conv_format.glFormat, conv_format.glType, mem);
 
-        gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, src_pitch / format->byte_count);
+        gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, src_pitch / conv_format.byte_count);
         gl_info->gl_ops.gl.p_glTexSubImage2D(surface->texture_target, surface->texture_level,
-                dst_point->x, dst_point->y, update_w, update_h, format->glFormat, format->glType, addr);
+                dst_point->x, dst_point->y, update_w, update_h, conv_format.glFormat, conv_format.glType, mem);
         gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         checkGLcall("glTexSubImage2D");
     }
@@ -2110,6 +2161,8 @@ static void surface_upload_data(struct wined3d_surface *surface, const struct wi
             context_surface_update(device->contexts[i], surface);
         }
     }
+
+    HeapFree(GetProcessHeap(), 0, conv_dst);
 }
 
 static BOOL surface_check_block_align(struct wined3d_surface *surface, const RECT *rect)
@@ -2216,7 +2269,7 @@ HRESULT surface_upload_from_surface(struct wined3d_surface *dst_surface, const P
     }
 
     /* Use wined3d_surface_blt() instead of uploading directly if we need conversion. */
-    d3dfmt_get_conv(dst_surface, FALSE, TRUE, &format, &convert);
+    d3dfmt_get_conv(dst_surface, dst_surface->resource.format, FALSE, TRUE, &format, &convert);
     if (convert != WINED3D_CT_NONE || format.convert)
         return wined3d_surface_blt(dst_surface, &dst_rect, src_surface, src_rect, 0, NULL, WINED3D_TEXF_POINT);
 
@@ -3727,7 +3780,7 @@ static void surface_prepare_texture_internal(struct wined3d_surface *surface,
 
     if (surface->flags & alloc_flag) return;
 
-    d3dfmt_get_conv(surface, TRUE, TRUE, &format, &convert);
+    d3dfmt_get_conv(surface, surface->resource.format, TRUE, TRUE, &format, &convert);
     if (convert != WINED3D_CT_NONE || format.convert)
         surface->flags |= SFLAG_CONVERTED;
     else surface->flags &= ~SFLAG_CONVERTED;
@@ -4923,13 +4976,10 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
 {
     RECT src_rect = {0, 0, surface->resource.width, surface->resource.height};
     struct wined3d_device *device = surface->resource.device;
-    enum wined3d_conversion_type convert;
     struct wined3d_context *context;
-    UINT width, src_pitch, dst_pitch;
+    UINT src_pitch;
     struct wined3d_bo_address data;
-    struct wined3d_format format;
     POINT dst_point = {0, 0};
-    BYTE *mem = NULL;
 
     if (wined3d_settings.offscreen_rendering_mode != ORM_FBO
             && surface_is_offscreen(surface)
@@ -4973,10 +5023,6 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     }
 
     /* Upload from system memory */
-
-    d3dfmt_get_conv(surface, TRUE /* We need color keying */,
-            TRUE /* We will use textures */, &format, &convert);
-
     if (srgb)
     {
         if ((surface->flags & (SFLAG_INTEXTURE | SFLAG_INSYSMEM)) == SFLAG_INTEXTURE)
@@ -5016,67 +5062,22 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     }
     else surface->flags &= ~SFLAG_GLCKEY;
 
-    width = surface->resource.width;
     src_pitch = wined3d_surface_get_pitch(surface);
 
     /* Don't use PBOs for converted surfaces. During PBO conversion we look at
      * SFLAG_CONVERTED but it isn't set (yet) in all cases it is getting
      * called. */
-    if ((convert != WINED3D_CT_NONE || format.convert) && (surface->flags & SFLAG_PBO))
+    if ((surface->flags & SFLAG_GLCKEY || surface->resource.format->convert) && (surface->flags & SFLAG_PBO))
     {
         TRACE("Removing the pbo attached to surface %p.\n", surface);
         surface_remove_pbo(surface, gl_info);
     }
 
-    surface_get_memory(surface, &data);
-    if (format.convert)
-    {
-        /* This code is entered for texture formats which need a fixup. */
-        UINT height = surface->resource.height;
-
-        /* Stick to the alignment for the converted surface too, makes it easier to load the surface */
-        dst_pitch = width * format.conv_byte_count;
-        dst_pitch = (dst_pitch + device->surface_alignment - 1) & ~(device->surface_alignment - 1);
-
-        if (!(mem = HeapAlloc(GetProcessHeap(), 0, dst_pitch * height)))
-        {
-            ERR("Out of memory (%u).\n", dst_pitch * height);
-            context_release(context);
-            return E_OUTOFMEMORY;
-        }
-        format.convert(data.addr, mem, src_pitch, src_pitch * height,
-                dst_pitch, dst_pitch * height, width, height, 1);
-        format.byte_count = format.conv_byte_count;
-        src_pitch = dst_pitch;
-        data.addr = mem;
-    }
-    else if (convert != WINED3D_CT_NONE)
-    {
-        /* This code is only entered for color keying fixups */
-        UINT height = surface->resource.height;
-
-        /* Stick to the alignment for the converted surface too, makes it easier to load the surface */
-        dst_pitch = width * format.conv_byte_count;
-        dst_pitch = (dst_pitch + device->surface_alignment - 1) & ~(device->surface_alignment - 1);
-
-        if (!(mem = HeapAlloc(GetProcessHeap(), 0, dst_pitch * height)))
-        {
-            ERR("Out of memory (%u).\n", dst_pitch * height);
-            context_release(context);
-            return E_OUTOFMEMORY;
-        }
-        d3dfmt_convert_surface(data.addr, mem, src_pitch,
-                width, height, dst_pitch, convert, surface);
-        format.byte_count = format.conv_byte_count;
-        src_pitch = dst_pitch;
-        data.addr = mem;
-    }
-
-    surface_upload_data(surface, gl_info, &format, &src_rect, src_pitch, &dst_point, srgb, &data);
+    data.buffer_object = surface->pbo;
+    data.addr = surface->resource.allocatedMemory;
+    surface_upload_data(surface, gl_info, surface->resource.format, &src_rect, src_pitch, &dst_point, srgb, &data);
 
     context_release(context);
-
-    HeapFree(GetProcessHeap(), 0, mem);
 
     return WINED3D_OK;
 }
