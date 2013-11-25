@@ -1699,119 +1699,6 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
     }
 }
 
-/* This call just uploads data, the caller is responsible for binding the
- * correct texture. */
-/* Context activation is done by the caller. */
-static void surface_upload_data(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info,
-        const struct wined3d_format *format, const RECT *src_rect, UINT src_pitch, const POINT *dst_point,
-        BOOL srgb, const struct wined3d_bo_address *data)
-{
-    UINT update_w = src_rect->right - src_rect->left;
-    UINT update_h = src_rect->bottom - src_rect->top;
-
-    TRACE("surface %p, gl_info %p, format %s, src_rect %s, src_pitch %u, dst_point %s, srgb %#x, data {%#x:%p}.\n",
-            surface, gl_info, debug_d3dformat(format->id), wine_dbgstr_rect(src_rect), src_pitch,
-            wine_dbgstr_point(dst_point), srgb, data->buffer_object, data->addr);
-
-    if (surface->resource.map_count)
-    {
-        WARN("Uploading a surface that is currently mapped, setting SFLAG_PIN_SYSMEM.\n");
-        surface->flags |= SFLAG_PIN_SYSMEM;
-    }
-
-    if (format->flags & WINED3DFMT_FLAG_HEIGHT_SCALE)
-    {
-        update_h *= format->height_scale.numerator;
-        update_h /= format->height_scale.denominator;
-    }
-
-    if (data->buffer_object)
-    {
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, data->buffer_object));
-        checkGLcall("glBindBufferARB");
-    }
-
-    if (format->flags & WINED3DFMT_FLAG_COMPRESSED)
-    {
-        UINT row_length = wined3d_format_calculate_size(format, 1, update_w, 1, 1);
-        UINT row_count = (update_h + format->block_height - 1) / format->block_height;
-        const BYTE *addr = data->addr;
-        GLenum internal;
-
-        addr += (src_rect->top / format->block_height) * src_pitch;
-        addr += (src_rect->left / format->block_width) * format->block_byte_count;
-
-        if (srgb)
-            internal = format->glGammaInternal;
-        else if (surface->resource.usage & WINED3DUSAGE_RENDERTARGET && surface_is_offscreen(surface))
-            internal = format->rtInternal;
-        else
-            internal = format->glInternal;
-
-        TRACE("glCompressedTexSubImage2DARB, target %#x, level %d, x %d, y %d, w %d, h %d, "
-                "format %#x, image_size %#x, addr %p.\n", surface->texture_target, surface->texture_level,
-                dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, addr);
-
-        if (row_length == src_pitch)
-        {
-            GL_EXTCALL(glCompressedTexSubImage2DARB(surface->texture_target, surface->texture_level,
-                    dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, addr));
-        }
-        else
-        {
-            UINT row, y;
-
-            /* glCompressedTexSubImage2DARB() ignores pixel store state, so we
-             * can't use the unpack row length like below. */
-            for (row = 0, y = dst_point->y; row < row_count; ++row)
-            {
-                GL_EXTCALL(glCompressedTexSubImage2DARB(surface->texture_target, surface->texture_level,
-                        dst_point->x, y, update_w, format->block_height, internal, row_length, addr));
-                y += format->block_height;
-                addr += src_pitch;
-            }
-        }
-        checkGLcall("glCompressedTexSubImage2DARB");
-    }
-    else
-    {
-        const BYTE *addr = data->addr;
-
-        addr += src_rect->top * src_pitch;
-        addr += src_rect->left * format->byte_count;
-
-        TRACE("glTexSubImage2D, target %#x, level %d, x %d, y %d, w %d, h %d, format %#x, type %#x, addr %p.\n",
-                surface->texture_target, surface->texture_level, dst_point->x, dst_point->y,
-                update_w, update_h, format->glFormat, format->glType, addr);
-
-        gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, src_pitch / format->byte_count);
-        gl_info->gl_ops.gl.p_glTexSubImage2D(surface->texture_target, surface->texture_level,
-                dst_point->x, dst_point->y, update_w, update_h, format->glFormat, format->glType, addr);
-        gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        checkGLcall("glTexSubImage2D");
-    }
-
-    if (data->buffer_object)
-    {
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
-        checkGLcall("glBindBufferARB");
-    }
-
-    if (wined3d_settings.strict_draw_ordering)
-        gl_info->gl_ops.gl.p_glFlush();
-
-    if (gl_info->quirks & WINED3D_QUIRK_FBO_TEX_UPDATE)
-    {
-        struct wined3d_device *device = surface->resource.device;
-        unsigned int i;
-
-        for (i = 0; i < device->context_count; ++i)
-        {
-            context_surface_update(device->contexts[i], surface);
-        }
-    }
-}
-
 static HRESULT d3dfmt_get_conv(const struct wined3d_surface *surface, BOOL need_alpha_ck, BOOL use_texturing,
         struct wined3d_format *format, enum wined3d_conversion_type *conversion_type)
 {
@@ -1938,6 +1825,291 @@ static HRESULT d3dfmt_get_conv(const struct wined3d_surface *surface, BOOL need_
     }
 
     return WINED3D_OK;
+}
+
+static BOOL color_in_range(const struct wined3d_color_key *color_key, DWORD color)
+{
+    /* FIXME: Is this really how color keys are supposed to work? I think it
+     * makes more sense to compare the individual channels. */
+    return color >= color_key->color_space_low_value
+            && color <= color_key->color_space_high_value;
+}
+
+static HRESULT d3dfmt_convert_surface(const BYTE *src, BYTE *dst, UINT pitch, UINT width, UINT height,
+        UINT outpitch, enum wined3d_conversion_type conversion_type, struct wined3d_surface *surface)
+{
+    const BYTE *source;
+    BYTE *dest;
+
+    TRACE("src %p, dst %p, pitch %u, width %u, height %u, outpitch %u, conversion_type %#x, surface %p.\n",
+            src, dst, pitch, width, height, outpitch, conversion_type, surface);
+
+    switch (conversion_type)
+    {
+        case WINED3D_CT_NONE:
+        {
+            memcpy(dst, src, pitch * height);
+            break;
+        }
+
+        case WINED3D_CT_PALETTED:
+        case WINED3D_CT_PALETTED_CK:
+        {
+            BYTE table[256][4];
+            unsigned int x, y;
+
+            d3dfmt_p8_init_palette(surface, table, (conversion_type == WINED3D_CT_PALETTED_CK));
+
+            for (y = 0; y < height; y++)
+            {
+                source = src + pitch * y;
+                dest = dst + outpitch * y;
+                /* This is an 1 bpp format, using the width here is fine */
+                for (x = 0; x < width; x++) {
+                    BYTE color = *source++;
+                    *dest++ = table[color][0];
+                    *dest++ = table[color][1];
+                    *dest++ = table[color][2];
+                    *dest++ = table[color][3];
+                }
+            }
+        }
+        break;
+
+        case WINED3D_CT_CK_565:
+        {
+            /* Converting the 565 format in 5551 packed to emulate color-keying.
+
+              Note : in all these conversion, it would be best to average the averaging
+                      pixels to get the color of the pixel that will be color-keyed to
+                      prevent 'color bleeding'. This will be done later on if ever it is
+                      too visible.
+
+              Note2: Nvidia documents say that their driver does not support alpha + color keying
+                     on the same surface and disables color keying in such a case
+            */
+            unsigned int x, y;
+            const WORD *Source;
+            WORD *Dest;
+
+            TRACE("Color keyed 565\n");
+
+            for (y = 0; y < height; y++) {
+                Source = (const WORD *)(src + y * pitch);
+                Dest = (WORD *) (dst + y * outpitch);
+                for (x = 0; x < width; x++ ) {
+                    WORD color = *Source++;
+                    *Dest = ((color & 0xffc0) | ((color & 0x1f) << 1));
+                    if (!color_in_range(&surface->container->src_blt_color_key, color))
+                        *Dest |= 0x0001;
+                    Dest++;
+                }
+            }
+        }
+        break;
+
+        case WINED3D_CT_CK_5551:
+        {
+            /* Converting X1R5G5B5 format to R5G5B5A1 to emulate color-keying. */
+            unsigned int x, y;
+            const WORD *Source;
+            WORD *Dest;
+            TRACE("Color keyed 5551\n");
+            for (y = 0; y < height; y++) {
+                Source = (const WORD *)(src + y * pitch);
+                Dest = (WORD *) (dst + y * outpitch);
+                for (x = 0; x < width; x++ ) {
+                    WORD color = *Source++;
+                    *Dest = color;
+                    if (!color_in_range(&surface->container->src_blt_color_key, color))
+                        *Dest |= (1 << 15);
+                    else
+                        *Dest &= ~(1 << 15);
+                    Dest++;
+                }
+            }
+        }
+        break;
+
+        case WINED3D_CT_CK_RGB24:
+        {
+            /* Converting R8G8B8 format to R8G8B8A8 with color-keying. */
+            unsigned int x, y;
+            for (y = 0; y < height; y++)
+            {
+                source = src + pitch * y;
+                dest = dst + outpitch * y;
+                for (x = 0; x < width; x++) {
+                    DWORD color = ((DWORD)source[0] << 16) + ((DWORD)source[1] << 8) + (DWORD)source[2] ;
+                    DWORD dstcolor = color << 8;
+                    if (!color_in_range(&surface->container->src_blt_color_key, color))
+                        dstcolor |= 0xff;
+                    *(DWORD*)dest = dstcolor;
+                    source += 3;
+                    dest += 4;
+                }
+            }
+        }
+        break;
+
+        case WINED3D_CT_RGB32_888:
+        {
+            /* Converting X8R8G8B8 format to R8G8B8A8 with color-keying. */
+            unsigned int x, y;
+            for (y = 0; y < height; y++)
+            {
+                source = src + pitch * y;
+                dest = dst + outpitch * y;
+                for (x = 0; x < width; x++) {
+                    DWORD color = 0xffffff & *(const DWORD*)source;
+                    DWORD dstcolor = color << 8;
+                    if (!color_in_range(&surface->container->src_blt_color_key, color))
+                        dstcolor |= 0xff;
+                    *(DWORD*)dest = dstcolor;
+                    source += 4;
+                    dest += 4;
+                }
+            }
+        }
+        break;
+
+        case WINED3D_CT_CK_ARGB32:
+        {
+            unsigned int x, y;
+            for (y = 0; y < height; ++y)
+            {
+                source = src + pitch * y;
+                dest = dst + outpitch * y;
+                for (x = 0; x < width; ++x)
+                {
+                    DWORD color = *(const DWORD *)source;
+                    if (color_in_range(&surface->container->src_blt_color_key, color))
+                        color &= ~0xff000000;
+                    *(DWORD*)dest = color;
+                    source += 4;
+                    dest += 4;
+                }
+            }
+        }
+        break;
+
+        default:
+            ERR("Unsupported conversion type %#x.\n", conversion_type);
+    }
+    return WINED3D_OK;
+}
+
+/* This call just uploads data, the caller is responsible for binding the
+ * correct texture. */
+/* Context activation is done by the caller. */
+static void surface_upload_data(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info,
+        const struct wined3d_format *format, const RECT *src_rect, UINT src_pitch, const POINT *dst_point,
+        BOOL srgb, const struct wined3d_bo_address *data)
+{
+    UINT update_w = src_rect->right - src_rect->left;
+    UINT update_h = src_rect->bottom - src_rect->top;
+
+    TRACE("surface %p, gl_info %p, format %s, src_rect %s, src_pitch %u, dst_point %s, srgb %#x, data {%#x:%p}.\n",
+            surface, gl_info, debug_d3dformat(format->id), wine_dbgstr_rect(src_rect), src_pitch,
+            wine_dbgstr_point(dst_point), srgb, data->buffer_object, data->addr);
+
+    if (surface->resource.map_count)
+    {
+        WARN("Uploading a surface that is currently mapped, setting SFLAG_PIN_SYSMEM.\n");
+        surface->flags |= SFLAG_PIN_SYSMEM;
+    }
+
+    if (format->flags & WINED3DFMT_FLAG_HEIGHT_SCALE)
+    {
+        update_h *= format->height_scale.numerator;
+        update_h /= format->height_scale.denominator;
+    }
+
+    if (data->buffer_object)
+    {
+        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, data->buffer_object));
+        checkGLcall("glBindBufferARB");
+    }
+
+    if (format->flags & WINED3DFMT_FLAG_COMPRESSED)
+    {
+        UINT row_length = wined3d_format_calculate_size(format, 1, update_w, 1, 1);
+        UINT row_count = (update_h + format->block_height - 1) / format->block_height;
+        const BYTE *addr = data->addr;
+        GLenum internal;
+
+        addr += (src_rect->top / format->block_height) * src_pitch;
+        addr += (src_rect->left / format->block_width) * format->block_byte_count;
+
+        if (srgb)
+            internal = format->glGammaInternal;
+        else if (surface->resource.usage & WINED3DUSAGE_RENDERTARGET && surface_is_offscreen(surface))
+            internal = format->rtInternal;
+        else
+            internal = format->glInternal;
+
+        TRACE("glCompressedTexSubImage2DARB, target %#x, level %d, x %d, y %d, w %d, h %d, "
+                "format %#x, image_size %#x, addr %p.\n", surface->texture_target, surface->texture_level,
+                dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, addr);
+
+        if (row_length == src_pitch)
+        {
+            GL_EXTCALL(glCompressedTexSubImage2DARB(surface->texture_target, surface->texture_level,
+                    dst_point->x, dst_point->y, update_w, update_h, internal, row_count * row_length, addr));
+        }
+        else
+        {
+            UINT row, y;
+
+            /* glCompressedTexSubImage2DARB() ignores pixel store state, so we
+             * can't use the unpack row length like below. */
+            for (row = 0, y = dst_point->y; row < row_count; ++row)
+            {
+                GL_EXTCALL(glCompressedTexSubImage2DARB(surface->texture_target, surface->texture_level,
+                        dst_point->x, y, update_w, format->block_height, internal, row_length, addr));
+                y += format->block_height;
+                addr += src_pitch;
+            }
+        }
+        checkGLcall("glCompressedTexSubImage2DARB");
+    }
+    else
+    {
+        const BYTE *addr = data->addr;
+
+        addr += src_rect->top * src_pitch;
+        addr += src_rect->left * format->byte_count;
+
+        TRACE("glTexSubImage2D, target %#x, level %d, x %d, y %d, w %d, h %d, format %#x, type %#x, addr %p.\n",
+                surface->texture_target, surface->texture_level, dst_point->x, dst_point->y,
+                update_w, update_h, format->glFormat, format->glType, addr);
+
+        gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, src_pitch / format->byte_count);
+        gl_info->gl_ops.gl.p_glTexSubImage2D(surface->texture_target, surface->texture_level,
+                dst_point->x, dst_point->y, update_w, update_h, format->glFormat, format->glType, addr);
+        gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        checkGLcall("glTexSubImage2D");
+    }
+
+    if (data->buffer_object)
+    {
+        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
+        checkGLcall("glBindBufferARB");
+    }
+
+    if (wined3d_settings.strict_draw_ordering)
+        gl_info->gl_ops.gl.p_glFlush();
+
+    if (gl_info->quirks & WINED3D_QUIRK_FBO_TEX_UPDATE)
+    {
+        struct wined3d_device *device = surface->resource.device;
+        unsigned int i;
+
+        for (i = 0; i < device->context_count; ++i)
+        {
+            context_surface_update(device->contexts[i], surface);
+        }
+    }
 }
 
 static BOOL surface_check_block_align(struct wined3d_surface *surface, const RECT *rect)
@@ -3609,14 +3781,6 @@ void surface_prepare_rb(struct wined3d_surface *surface, const struct wined3d_gl
     }
 }
 
-static BOOL color_in_range(const struct wined3d_color_key *color_key, DWORD color)
-{
-    /* FIXME: Is this really how color keys are supposed to work? I think it
-     * makes more sense to compare the individual channels. */
-    return color >= color_key->color_space_low_value
-            && color <= color_key->color_space_high_value;
-}
-
 void d3dfmt_p8_init_palette(const struct wined3d_surface *surface, BYTE table[256][4], BOOL colorkey)
 {
     const struct wined3d_device *device = surface->resource.device;
@@ -3667,170 +3831,6 @@ void d3dfmt_p8_init_palette(const struct wined3d_surface *surface, BYTE table[25
                 table[i][3] = 0xff;
         }
     }
-}
-
-static HRESULT d3dfmt_convert_surface(const BYTE *src, BYTE *dst, UINT pitch, UINT width, UINT height,
-        UINT outpitch, enum wined3d_conversion_type conversion_type, struct wined3d_surface *surface)
-{
-    const BYTE *source;
-    BYTE *dest;
-
-    TRACE("src %p, dst %p, pitch %u, width %u, height %u, outpitch %u, conversion_type %#x, surface %p.\n",
-            src, dst, pitch, width, height, outpitch, conversion_type, surface);
-
-    switch (conversion_type)
-    {
-        case WINED3D_CT_NONE:
-        {
-            memcpy(dst, src, pitch * height);
-            break;
-        }
-
-        case WINED3D_CT_PALETTED:
-        case WINED3D_CT_PALETTED_CK:
-        {
-            BYTE table[256][4];
-            unsigned int x, y;
-
-            d3dfmt_p8_init_palette(surface, table, (conversion_type == WINED3D_CT_PALETTED_CK));
-
-            for (y = 0; y < height; y++)
-            {
-                source = src + pitch * y;
-                dest = dst + outpitch * y;
-                /* This is an 1 bpp format, using the width here is fine */
-                for (x = 0; x < width; x++) {
-                    BYTE color = *source++;
-                    *dest++ = table[color][0];
-                    *dest++ = table[color][1];
-                    *dest++ = table[color][2];
-                    *dest++ = table[color][3];
-                }
-            }
-        }
-        break;
-
-        case WINED3D_CT_CK_565:
-        {
-            /* Converting the 565 format in 5551 packed to emulate color-keying.
-
-              Note : in all these conversion, it would be best to average the averaging
-                      pixels to get the color of the pixel that will be color-keyed to
-                      prevent 'color bleeding'. This will be done later on if ever it is
-                      too visible.
-
-              Note2: Nvidia documents say that their driver does not support alpha + color keying
-                     on the same surface and disables color keying in such a case
-            */
-            unsigned int x, y;
-            const WORD *Source;
-            WORD *Dest;
-
-            TRACE("Color keyed 565\n");
-
-            for (y = 0; y < height; y++) {
-                Source = (const WORD *)(src + y * pitch);
-                Dest = (WORD *) (dst + y * outpitch);
-                for (x = 0; x < width; x++ ) {
-                    WORD color = *Source++;
-                    *Dest = ((color & 0xffc0) | ((color & 0x1f) << 1));
-                    if (!color_in_range(&surface->container->src_blt_color_key, color))
-                        *Dest |= 0x0001;
-                    Dest++;
-                }
-            }
-        }
-        break;
-
-        case WINED3D_CT_CK_5551:
-        {
-            /* Converting X1R5G5B5 format to R5G5B5A1 to emulate color-keying. */
-            unsigned int x, y;
-            const WORD *Source;
-            WORD *Dest;
-            TRACE("Color keyed 5551\n");
-            for (y = 0; y < height; y++) {
-                Source = (const WORD *)(src + y * pitch);
-                Dest = (WORD *) (dst + y * outpitch);
-                for (x = 0; x < width; x++ ) {
-                    WORD color = *Source++;
-                    *Dest = color;
-                    if (!color_in_range(&surface->container->src_blt_color_key, color))
-                        *Dest |= (1 << 15);
-                    else
-                        *Dest &= ~(1 << 15);
-                    Dest++;
-                }
-            }
-        }
-        break;
-
-        case WINED3D_CT_CK_RGB24:
-        {
-            /* Converting R8G8B8 format to R8G8B8A8 with color-keying. */
-            unsigned int x, y;
-            for (y = 0; y < height; y++)
-            {
-                source = src + pitch * y;
-                dest = dst + outpitch * y;
-                for (x = 0; x < width; x++) {
-                    DWORD color = ((DWORD)source[0] << 16) + ((DWORD)source[1] << 8) + (DWORD)source[2] ;
-                    DWORD dstcolor = color << 8;
-                    if (!color_in_range(&surface->container->src_blt_color_key, color))
-                        dstcolor |= 0xff;
-                    *(DWORD*)dest = dstcolor;
-                    source += 3;
-                    dest += 4;
-                }
-            }
-        }
-        break;
-
-        case WINED3D_CT_RGB32_888:
-        {
-            /* Converting X8R8G8B8 format to R8G8B8A8 with color-keying. */
-            unsigned int x, y;
-            for (y = 0; y < height; y++)
-            {
-                source = src + pitch * y;
-                dest = dst + outpitch * y;
-                for (x = 0; x < width; x++) {
-                    DWORD color = 0xffffff & *(const DWORD*)source;
-                    DWORD dstcolor = color << 8;
-                    if (!color_in_range(&surface->container->src_blt_color_key, color))
-                        dstcolor |= 0xff;
-                    *(DWORD*)dest = dstcolor;
-                    source += 4;
-                    dest += 4;
-                }
-            }
-        }
-        break;
-
-        case WINED3D_CT_CK_ARGB32:
-        {
-            unsigned int x, y;
-            for (y = 0; y < height; ++y)
-            {
-                source = src + pitch * y;
-                dest = dst + outpitch * y;
-                for (x = 0; x < width; ++x)
-                {
-                    DWORD color = *(const DWORD *)source;
-                    if (color_in_range(&surface->container->src_blt_color_key, color))
-                        color &= ~0xff000000;
-                    *(DWORD*)dest = color;
-                    source += 4;
-                    dest += 4;
-                }
-            }
-        }
-        break;
-
-        default:
-            ERR("Unsupported conversion type %#x.\n", conversion_type);
-    }
-    return WINED3D_OK;
 }
 
 void flip_surface(struct wined3d_surface *front, struct wined3d_surface *back)
