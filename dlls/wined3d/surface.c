@@ -2716,7 +2716,8 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
         create_dib = TRUE;
     }
 
-    surface->flags &= ~SFLAG_LOCATIONS;
+    surface_validate_location(surface, SFLAG_INSYSMEM);
+    surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
     surface->resource.allocatedMemory = NULL;
     wined3d_resource_free_sysmem(&surface->resource);
 
