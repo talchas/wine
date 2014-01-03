@@ -2731,8 +2731,10 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
         create_dib = TRUE;
     }
 
-    surface_validate_location(surface, SFLAG_INSYSMEM);
-    surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
+
+    /* FIXME: We want to set DISCARDED here, with validate / invalidate,
+     * but it doesn't work yet. */
+    surface->flags &= ~SFLAG_LOCATIONS;
     surface->resource.allocatedMemory = NULL;
     wined3d_resource_free_sysmem(&surface->resource);
 
