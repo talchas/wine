@@ -2115,16 +2115,19 @@ void wined3d_texture_load(struct wined3d_texture *texture,
         struct wined3d_context *context, BOOL srgb) DECLSPEC_HIDDEN;
 void wined3d_texture_set_dirty(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
 
-#define WINED3D_VFLAG_ALLOCATED         0x00000001
-#define WINED3D_VFLAG_SRGB_ALLOCATED    0x00000002
-#define WINED3D_VFLAG_PBO               0x00000004
-#define WINED3D_VFLAG_CLIENT_STORAGE    0x00000008
+#define WINED3D_VFLAG_ALLOCATED             0x00000001
+#define WINED3D_VFLAG_SRGB_ALLOCATED        0x00000002
+#define WINED3D_VFLAG_PBO                   0x00000004
+#define WINED3D_VFLAG_CLIENT_STORAGE        0x00000008
 
-#define WINED3D_LOCATION_DISCARDED      0x00000001
-#define WINED3D_LOCATION_SYSMEM         0x00000002
-#define WINED3D_LOCATION_BUFFER         0x00000004
-#define WINED3D_LOCATION_TEXTURE_RGB    0x00000008
-#define WINED3D_LOCATION_TEXTURE_SRGB   0x00000010
+#define WINED3D_LOCATION_DISCARDED          0x00000001
+#define WINED3D_LOCATION_SYSMEM             0x00000002
+#define WINED3D_LOCATION_BUFFER             0x00000004
+#define WINED3D_LOCATION_TEXTURE_RGB        0x00000008
+#define WINED3D_LOCATION_TEXTURE_SRGB       0x00000010
+#define WINED3D_LOCATION_DRAWABLE           0x00000020
+#define WINED3D_LOCATION_RB_MULTISAMPLE     0x00000040
+#define WINED3D_LOCATION_RB_RESOLVED        0x00000080
 
 const char *wined3d_debug_location(DWORD location) DECLSPEC_HIDDEN;
 
@@ -2297,13 +2300,6 @@ void flip_surface(struct wined3d_surface *front, struct wined3d_surface *back) D
 #define SFLAG_DIBSECTION        0x00000400 /* Has a DIB section attached for GetDC. */
 #define SFLAG_ALLOCATED         0x00000800 /* A GL texture is allocated for this surface. */
 #define SFLAG_SRGBALLOCATED     0x00001000 /* A sRGB GL texture is allocated for this surface. */
-#define SFLAG_INSYSMEM          0x00002000 /* The system memory copy is current. */
-#define SFLAG_INTEXTURE         0x00004000 /* The GL texture is current. */
-#define SFLAG_INSRGBTEX         0x00008000 /* The GL sRGB texture is current. */
-#define SFLAG_INDRAWABLE        0x00010000 /* The GL drawable is current. */
-#define SFLAG_INRB_MULTISAMPLE  0x00020000 /* The multisample renderbuffer is current. */
-#define SFLAG_INRB_RESOLVED     0x00040000 /* The resolved renderbuffer is current. */
-#define SFLAG_DISCARDED         0x00080000 /* Surface was discarded, allocating new location is enough. */
 
 /* In some conditions the surface memory must not be freed:
  * SFLAG_CONVERTED: Converting the data back would take too long
@@ -2316,13 +2312,6 @@ void flip_surface(struct wined3d_surface *front, struct wined3d_surface *back) D
                              SFLAG_CLIENT           | \
                              SFLAG_DIBSECTION       | \
                              SFLAG_PIN_SYSMEM)
-
-#define SFLAG_LOCATIONS     (SFLAG_INSYSMEM         | \
-                             SFLAG_INTEXTURE        | \
-                             SFLAG_INSRGBTEX        | \
-                             SFLAG_INDRAWABLE       | \
-                             SFLAG_INRB_MULTISAMPLE | \
-                             SFLAG_INRB_RESOLVED)
 
 enum wined3d_conversion_type
 {
@@ -2659,7 +2648,6 @@ const char *debug_fbostatus(GLenum status) DECLSPEC_HIDDEN;
 const char *debug_glerror(GLenum error) DECLSPEC_HIDDEN;
 const char *debug_d3dtop(enum wined3d_texture_op d3dtop) DECLSPEC_HIDDEN;
 void dump_color_fixup_desc(struct color_fixup_desc fixup) DECLSPEC_HIDDEN;
-const char *debug_surflocation(DWORD flag) DECLSPEC_HIDDEN;
 
 BOOL is_invalid_op(const struct wined3d_state *state, int stage,
         enum wined3d_texture_op op, DWORD arg1, DWORD arg2, DWORD arg3) DECLSPEC_HIDDEN;
