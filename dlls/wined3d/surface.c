@@ -42,8 +42,7 @@ static void surface_cleanup(struct wined3d_surface *surface)
 
     TRACE("surface %p.\n", surface);
 
-    if ((surface->flags & SFLAG_PBO) || surface->rb_multisample
-            || surface->rb_resolved || !list_empty(&surface->renderbuffers))
+    if (surface->rb_multisample || surface->rb_resolved || !list_empty(&surface->renderbuffers))
     {
         struct wined3d_renderbuffer_entry *entry, *entry2;
         const struct wined3d_gl_info *gl_info;
@@ -51,12 +50,6 @@ static void surface_cleanup(struct wined3d_surface *surface)
 
         context = context_acquire(surface->resource.device, NULL);
         gl_info = context->gl_info;
-
-        if (surface->flags & SFLAG_PBO)
-        {
-            TRACE("Deleting PBO %u.\n", surface->pbo);
-            GL_EXTCALL(glDeleteBuffersARB(1, &surface->pbo));
-        }
 
         if (surface->rb_multisample)
         {
@@ -522,83 +515,24 @@ static void surface_get_memory(const struct wined3d_surface *surface, struct win
         data->buffer_object = 0;
         return;
     }
-    if (surface->flags & SFLAG_PBO)
-    {
-        data->addr = NULL;
-        data->buffer_object = surface->pbo;
-        return;
-    }
     data->addr = surface->resource.allocatedMemory;
     data->buffer_object = 0;
 }
 
-static BOOL surface_need_pbo(const struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info)
-{
-    if (surface->resource.pool == WINED3D_POOL_SYSTEM_MEM)
-        return FALSE;
-    if (!(surface->flags & SFLAG_DYNLOCK))
-        return FALSE;
-    if (surface->flags & (SFLAG_CONVERTED | SFLAG_NONPOW2 | SFLAG_PIN_SYSMEM))
-        return FALSE;
-    if (!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT])
-        return FALSE;
-
-    return TRUE;
-}
-
-static void surface_create_pbo(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info)
-{
-    struct wined3d_context *context;
-    GLenum error;
-    struct wined3d_bo_address data;
-    surface_get_memory(surface, &data);
-
-    context = context_acquire(surface->resource.device, NULL);
-
-    GL_EXTCALL(glGenBuffersARB(1, &surface->pbo));
-    error = gl_info->gl_ops.gl.p_glGetError();
-    if (!surface->pbo || error != GL_NO_ERROR)
-        ERR("Failed to create a PBO with error %s (%#x).\n", debug_glerror(error), error);
-
-    TRACE("Binding PBO %u.\n", surface->pbo);
-
-    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, surface->pbo));
-    checkGLcall("glBindBufferARB");
-
-    GL_EXTCALL(glBufferDataARB(GL_PIXEL_UNPACK_BUFFER_ARB, surface->resource.size + 4,
-            data.addr, GL_STREAM_DRAW_ARB));
-    checkGLcall("glBufferDataARB");
-
-    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
-    checkGLcall("glBindBufferARB");
-
-    /* We don't need the system memory anymore and we can't even use it for PBOs. */
-    if (!(surface->flags & SFLAG_CLIENT))
-        wined3d_resource_free_sysmem(&surface->resource);
-    surface->resource.allocatedMemory = NULL;
-    surface->flags |= SFLAG_PBO;
-    context_release(context);
-}
-
 static void surface_prepare_system_memory(struct wined3d_surface *surface)
 {
-    const struct wined3d_gl_info *gl_info = &surface->resource.device->adapter->gl_info;
-
     TRACE("surface %p.\n", surface);
 
-    if (!(surface->flags & SFLAG_PBO) && surface_need_pbo(surface, gl_info))
-        surface_create_pbo(surface, gl_info);
-    else if (!(surface->resource.allocatedMemory || surface->flags & SFLAG_PBO
-            || surface->user_memory))
+    if (!surface->resource.allocatedMemory && !surface->user_memory)
     {
         /* Whatever surface we have, make sure that there is memory allocated
-         * for the downloaded copy, or a PBO to map. */
+         * for the downloaded copy. */
         if (!surface->resource.heap_memory && !wined3d_resource_allocate_sysmem(&surface->resource))
             ERR("Failed to allocate system memory.\n");
         surface->resource.allocatedMemory = surface->resource.heap_memory;
 
         if (surface->flags & SFLAG_INSYSMEM)
-            ERR("Surface without memory or PBO has SFLAG_INSYSMEM set.\n");
+            ERR("Surface without memory has SFLAG_INSYSMEM set.\n");
     }
 }
 
@@ -788,8 +722,6 @@ static void surface_realize_palette(struct wined3d_surface *surface)
 
 static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWORD flags)
 {
-    struct wined3d_device *device = surface->resource.device;
-
     TRACE("surface %p, rect %s, flags %#x.\n",
             surface, wine_dbgstr_rect(rect), flags);
 
@@ -810,30 +742,6 @@ static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWOR
     if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
         surface_invalidate_location(surface, ~SFLAG_INSYSMEM);
 
-    if (surface->flags & SFLAG_PBO)
-    {
-        BYTE *ret;
-        const struct wined3d_gl_info *gl_info;
-        struct wined3d_context *context;
-
-        context = context_acquire(device, NULL);
-        gl_info = context->gl_info;
-
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, surface->pbo));
-        checkGLcall("glBindBufferARB");
-
-        ret = GL_EXTCALL(glMapBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, GL_READ_WRITE_ARB));
-        checkGLcall("glMapBufferARB");
-
-        /* Make sure the PBO isn't set anymore in order not to break non-PBO
-         * calls. */
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
-        checkGLcall("glBindBufferARB");
-
-        context_release(context);
-        return ret;
-    }
-
     if (surface->user_memory)
         return surface->user_memory;
 
@@ -842,28 +750,9 @@ static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWOR
 
 static void surface_unmap(struct wined3d_surface *surface)
 {
-    struct wined3d_device *device = surface->resource.device;
-
     TRACE("surface %p.\n", surface);
 
     memset(&surface->lockedRect, 0, sizeof(surface->lockedRect));
-
-    if (surface->flags & SFLAG_PBO)
-    {
-        const struct wined3d_gl_info *gl_info;
-        struct wined3d_context *context;
-
-        TRACE("Freeing PBO memory.\n");
-
-        context = context_acquire(device, NULL);
-        gl_info = context->gl_info;
-
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, surface->pbo));
-        GL_EXTCALL(glUnmapBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB));
-        GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0));
-        checkGLcall("glUnmapBufferARB");
-        context_release(context);
-    }
 
     TRACE("dirtyfied %u.\n", surface->flags & (SFLAG_INDRAWABLE | SFLAG_INTEXTURE) ? 0 : 1);
 
@@ -1270,36 +1159,6 @@ HRESULT CDECL wined3d_surface_get_render_target_data(struct wined3d_surface *sur
     return wined3d_surface_blt(surface, NULL, render_target, NULL, 0, NULL, WINED3D_TEXF_POINT);
 }
 
-/* Context activation is done by the caller. */
-static void surface_remove_pbo(struct wined3d_surface *surface, const struct wined3d_gl_info *gl_info)
-{
-    if (surface->flags & SFLAG_DIBSECTION)
-    {
-        surface->resource.allocatedMemory = surface->dib.bitmap_data;
-    }
-    else
-    {
-        if (!surface->resource.heap_memory)
-            wined3d_resource_allocate_sysmem(&surface->resource);
-        else if (!(surface->flags & SFLAG_CLIENT))
-            ERR("Surface %p has heap_memory %p and flags %#x.\n",
-                    surface, surface->resource.heap_memory, surface->flags);
-
-        surface->resource.allocatedMemory = surface->resource.heap_memory;
-    }
-
-    GL_EXTCALL(glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, surface->pbo));
-    checkGLcall("glBindBufferARB(GL_PIXEL_UNPACK_BUFFER, surface->pbo)");
-    GL_EXTCALL(glGetBufferSubDataARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0,
-            surface->resource.size, surface->resource.allocatedMemory));
-    checkGLcall("glGetBufferSubDataARB");
-    GL_EXTCALL(glDeleteBuffersARB(1, &surface->pbo));
-    checkGLcall("glDeleteBuffersARB");
-
-    surface->pbo = 0;
-    surface->flags &= ~SFLAG_PBO;
-}
-
 static BOOL surface_init_sysmem(struct wined3d_surface *surface)
 {
     if (surface->resource.allocatedMemory)
@@ -1353,8 +1212,8 @@ static void surface_unload(struct wined3d_resource *resource)
          * or the depth stencil into an FBO the texture or render buffer will be removed
          * and all flags get lost
          */
-        if (!(surface->flags & SFLAG_PBO))
-            surface_init_sysmem(surface);
+        surface_init_sysmem(surface);
+
         /* We also get here when the ddraw swapchain is destroyed, for example
          * for a mode switch. In this case this surface won't necessarily be
          * an implicit surface. We have to mark it lost so that the
@@ -1370,10 +1229,6 @@ static void surface_unload(struct wined3d_resource *resource)
 
     context = context_acquire(device, NULL);
     gl_info = context->gl_info;
-
-    /* Destroy PBOs, but load them into real sysmem before */
-    if (surface->flags & SFLAG_PBO)
-        surface_remove_pbo(surface, gl_info);
 
     /* Destroy fbo render buffers. This is needed for implicit render targets, for
      * all application-created targets the application has to release the surface
@@ -1564,21 +1419,9 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
         TRACE("(%p) : Calling glGetCompressedTexImageARB level %d, format %#x, type %#x, data %p.\n",
                 surface, surface->texture_level, format->glFormat, format->glType, data.addr);
 
-        if (data.buffer_object)
-        {
-            GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, data.buffer_object));
-            checkGLcall("glBindBufferARB");
-            GL_EXTCALL(glGetCompressedTexImageARB(surface->texture_target, surface->texture_level, NULL));
-            checkGLcall("glGetCompressedTexImageARB");
-            GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0));
-            checkGLcall("glBindBufferARB");
-        }
-        else
-        {
-            GL_EXTCALL(glGetCompressedTexImageARB(surface->texture_target,
-                    surface->texture_level, data.addr));
-            checkGLcall("glGetCompressedTexImageARB");
-        }
+        GL_EXTCALL(glGetCompressedTexImageARB(surface->texture_target,
+                surface->texture_level, data.addr));
+        checkGLcall("glGetCompressedTexImageARB");
     }
     else
     {
@@ -1611,24 +1454,9 @@ static void surface_download_data(struct wined3d_surface *surface, const struct 
         TRACE("(%p) : Calling glGetTexImage level %d, format %#x, type %#x, data %p\n",
                 surface, surface->texture_level, gl_format, gl_type, mem);
 
-        if (data.buffer_object)
-        {
-            GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, data.buffer_object));
-            checkGLcall("glBindBufferARB");
-
-            gl_info->gl_ops.gl.p_glGetTexImage(surface->texture_target, surface->texture_level,
-                    gl_format, gl_type, NULL);
-            checkGLcall("glGetTexImage");
-
-            GL_EXTCALL(glBindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0));
-            checkGLcall("glBindBufferARB");
-        }
-        else
-        {
-            gl_info->gl_ops.gl.p_glGetTexImage(surface->texture_target, surface->texture_level,
-                    gl_format, gl_type, mem);
-            checkGLcall("glGetTexImage");
-        }
+        gl_info->gl_ops.gl.p_glGetTexImage(surface->texture_target, surface->texture_level,
+                gl_format, gl_type, mem);
+        checkGLcall("glGetTexImage");
 
         if (surface->flags & SFLAG_NONPOW2)
         {
@@ -3442,8 +3270,7 @@ HRESULT CDECL wined3d_surface_getdc(struct wined3d_surface *surface, HDC *dc)
         if (FAILED(hr))
             return WINED3DERR_INVALIDCALL;
 
-        /* Use the DIB section from now on if we are not using a PBO or user memory. */
-        if (!(surface->flags & (SFLAG_PBO | SFLAG_PIN_SYSMEM) || surface->user_memory))
+        if (!(surface->flags & SFLAG_PIN_SYSMEM || surface->user_memory))
         {
             wined3d_resource_free_sysmem(&surface->resource);
             surface->resource.allocatedMemory = surface->dib.bitmap_data;
@@ -3923,13 +3750,6 @@ void flip_surface(struct wined3d_surface *front, struct wined3d_surface *back)
         tmp = front->resource.heap_memory;
         front->resource.heap_memory = back->resource.heap_memory;
         back->resource.heap_memory = tmp;
-    }
-
-    /* Flip the PBO */
-    {
-        GLuint tmp_pbo = front->pbo;
-        front->pbo = back->pbo;
-        back->pbo = tmp_pbo;
     }
 
     /* Flip the opengl texture */
@@ -5063,18 +4883,7 @@ static HRESULT surface_load_texture(struct wined3d_surface *surface,
     else surface->flags &= ~SFLAG_GLCKEY;
 
     src_pitch = wined3d_surface_get_pitch(surface);
-
-    /* Don't use PBOs for converted surfaces. During PBO conversion we look at
-     * SFLAG_CONVERTED but it isn't set (yet) in all cases it is getting
-     * called. */
-    if ((surface->flags & SFLAG_GLCKEY || surface->resource.format->convert) && (surface->flags & SFLAG_PBO))
-    {
-        TRACE("Removing the pbo attached to surface %p.\n", surface);
-        surface_remove_pbo(surface, gl_info);
-    }
-
-    data.buffer_object = surface->pbo;
-    data.addr = surface->resource.allocatedMemory;
+    surface_get_memory(surface, &data);
     surface_upload_data(surface, gl_info, surface->resource.format, &src_rect, src_pitch, &dst_point, srgb, &data);
 
     context_release(context);
@@ -5126,11 +4935,6 @@ HRESULT surface_load_location(struct wined3d_surface *surface, DWORD location)
     if (surface->flags & location)
     {
         TRACE("Location already up to date.\n");
-
-        if (location == SFLAG_INSYSMEM && !(surface->flags & SFLAG_PBO)
-                && surface_need_pbo(surface, gl_info))
-            surface_create_pbo(surface, gl_info);
-
         return WINED3D_OK;
     }
 
