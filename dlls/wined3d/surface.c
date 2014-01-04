@@ -706,39 +706,6 @@ static void surface_realize_palette(struct wined3d_surface *surface)
     context_release(context);
 }
 
-static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWORD flags)
-{
-    TRACE("surface %p, rect %s, flags %#x.\n",
-            surface, wine_dbgstr_rect(rect), flags);
-
-    surface_prepare_system_memory(surface);
-    if (flags & WINED3D_MAP_DISCARD)
-    {
-        TRACE("WINED3D_MAP_DISCARD flag passed, marking SYSMEM as up to date.\n");
-        wined3d_resource_validate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
-    }
-    else
-    {
-        struct wined3d_context *context = NULL;
-        if (surface->resource.usage & WINED3DUSAGE_DYNAMIC)
-            WARN_(d3d_perf)("Mapping a dynamic surface without WINED3D_MAP_DISCARD.\n");
-
-        if (surface->resource.device->d3d_initialized)
-            context = context_acquire(surface->resource.device, NULL);
-        wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
-        if (context)
-            context_release(context);
-    }
-
-    if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
-        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
-
-    if (surface->resource.user_memory)
-        return surface->resource.user_memory;
-
-    return surface->resource.allocatedMemory;
-}
-
 static void surface_frontbuffer_updated(struct wined3d_surface *surface)
 {
     struct wined3d_context *context = NULL;
@@ -1243,7 +1210,6 @@ static const struct wined3d_surface_ops surface_ops =
 {
     surface_private_setup,
     surface_realize_palette,
-    surface_map,
     surface_frontbuffer_updated,
 };
 
@@ -1319,17 +1285,6 @@ static void gdi_surface_realize_palette(struct wined3d_surface *surface)
         x11_copy_to_screen(surface->swapchain, NULL);
 }
 
-static BYTE *gdi_surface_map(struct wined3d_surface *surface, const RECT *rect, DWORD flags)
-{
-    TRACE("surface %p, rect %s, flags %#x.\n",
-            surface, wine_dbgstr_rect(rect), flags);
-
-    if (surface->resource.user_memory)
-        return surface->resource.user_memory;
-
-    return surface->resource.allocatedMemory;
-}
-
 static void gdi_surface_frontbuffer_updated(struct wined3d_surface *surface)
 {
     x11_copy_to_screen(surface->swapchain, &surface->lockedRect);
@@ -1339,7 +1294,6 @@ static const struct wined3d_surface_ops gdi_surface_ops =
 {
     gdi_surface_private_setup,
     gdi_surface_realize_palette,
-    gdi_surface_map,
     gdi_surface_frontbuffer_updated,
 };
 
@@ -3164,7 +3118,50 @@ HRESULT CDECL wined3d_surface_map(struct wined3d_surface *surface,
         }
     }
 
-    base_memory = surface->surface_ops->surface_map(surface, rect, flags);
+    surface_prepare_system_memory(surface);
+    if (flags & WINED3D_MAP_DISCARD)
+    {
+        TRACE("WINED3D_MAP_DISCARD flag passed, marking SYSMEM as up to date.\n");
+        wined3d_resource_validate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
+    }
+    else
+    {
+        struct wined3d_device *device = surface->resource.device;
+        struct wined3d_context *context = NULL;
+
+        if (surface->resource.usage & WINED3DUSAGE_DYNAMIC)
+            WARN_(d3d_perf)("Mapping a dynamic surface without WINED3D_MAP_DISCARD.\n");
+
+        if (device->d3d_initialized)
+            context = context_acquire(device, NULL);
+
+        wined3d_resource_load_location(&surface->resource, context, WINED3D_LOCATION_SYSMEM);
+
+        if (device->d3d_initialized)
+            context_release(context);
+    }
+
+    if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
+        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
+
+    switch (surface->resource.map_binding)
+    {
+        case WINED3D_LOCATION_BUFFER:
+            ERR("Not possible.\n");
+            base_memory = NULL;
+            break;
+
+        case WINED3D_LOCATION_SYSMEM:
+            if (surface->resource.user_memory)
+                base_memory = surface->resource.user_memory;
+            else
+                base_memory = surface->resource.heap_memory;
+            break;
+
+        default:
+            ERR("Unknown map binding %s.\n", wined3d_debug_location(surface->resource.map_binding));
+            base_memory = NULL;
+    }
 
     if (format->flags & WINED3DFMT_FLAG_BROKEN_PITCH)
         map_desc->row_pitch = surface->resource.width * format->byte_count;
