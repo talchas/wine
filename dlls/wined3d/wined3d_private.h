@@ -2008,6 +2008,7 @@ struct wined3d_resource
 
     DWORD locations, map_binding;
     void *heap_memory;
+    void *user_memory;
     GLuint buffer_object;
 
     void *parent;
@@ -2212,7 +2213,6 @@ struct wined3d_surface
     struct wined3d_swapchain *swapchain;
     struct wined3d_palette *palette; /* D3D7 style palette handling */
     DWORD draw_binding;
-    void *user_memory;
 
     DWORD flags;
 

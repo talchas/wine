@@ -498,9 +498,9 @@ static HRESULT surface_create_dib_section(struct wined3d_surface *surface)
 
 static void surface_get_memory(const struct wined3d_surface *surface, struct wined3d_bo_address *data)
 {
-    if (surface->user_memory)
+    if (surface->resource.user_memory)
     {
-        data->addr = surface->user_memory;
+        data->addr = surface->resource.user_memory;
         data->buffer_object = 0;
         return;
     }
@@ -512,7 +512,7 @@ void surface_prepare_system_memory(struct wined3d_surface *surface)
 {
     TRACE("surface %p.\n", surface);
 
-    if (!surface->resource.allocatedMemory && !surface->user_memory)
+    if (!surface->resource.allocatedMemory && !surface->resource.user_memory)
     {
         /* Whatever surface we have, make sure that there is memory allocated
          * for the downloaded copy. */
@@ -528,7 +528,7 @@ void surface_prepare_system_memory(struct wined3d_surface *surface)
 static void surface_evict_sysmem(struct wined3d_surface *surface)
 {
     if (surface->resource.map_count || (surface->flags & SFLAG_DONOTFREE)
-            || surface->user_memory)
+            || surface->resource.user_memory)
         return;
 
     wined3d_resource_free_sysmem(&surface->resource);
@@ -745,8 +745,8 @@ static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWOR
     if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
         wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
 
-    if (surface->user_memory)
-        return surface->user_memory;
+    if (surface->resource.user_memory)
+        return surface->resource.user_memory;
 
     return surface->resource.allocatedMemory;
 }
@@ -1348,8 +1348,8 @@ static BYTE *gdi_surface_map(struct wined3d_surface *surface, const RECT *rect, 
     TRACE("surface %p, rect %s, flags %#x.\n",
             surface, wine_dbgstr_rect(rect), flags);
 
-    if (surface->user_memory)
-        return surface->user_memory;
+    if (surface->resource.user_memory)
+        return surface->resource.user_memory;
 
     return surface->resource.allocatedMemory;
 }
@@ -2784,7 +2784,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
     else
         surface->flags &= ~SFLAG_NONPOW2;
 
-    surface->user_memory = mem;
+    surface->resource.user_memory = mem;
     surface->pitch = pitch;
     surface->resource.format = format;
     surface->resource.multisample_type = multisample_type;
@@ -2803,7 +2803,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
         }
         surface->resource.allocatedMemory = surface->dib.bitmap_data;
     }
-    else if (!surface->user_memory)
+    else if (!surface->resource.user_memory)
     {
         surface_prepare_system_memory(surface);
         memset(surface->resource.allocatedMemory, 0, surface->resource.size);
