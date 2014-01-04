@@ -737,7 +737,7 @@ static void texture2d_sub_resource_add_dirty_region(struct wined3d_resource *sub
 
     surface_prepare_system_memory(surface);
     surface_load_location(surface, WINED3D_LOCATION_SYSMEM);
-    surface_invalidate_location(surface, ~WINED3D_LOCATION_SYSMEM);
+    wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
 }
 
 static void texture2d_sub_resource_cleanup(struct wined3d_resource *sub_resource)

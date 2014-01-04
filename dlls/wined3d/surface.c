@@ -533,7 +533,7 @@ static void surface_evict_sysmem(struct wined3d_surface *surface)
 
     wined3d_resource_free_sysmem(&surface->resource);
     surface->resource.allocatedMemory = NULL;
-    surface_invalidate_location(surface, WINED3D_LOCATION_SYSMEM);
+    wined3d_resource_invalidate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
 }
 
 static void surface_force_reload(struct wined3d_surface *surface)
@@ -561,7 +561,7 @@ static void surface_release_client_storage(struct wined3d_surface *surface)
 
     context_release(context);
 
-    surface_invalidate_location(surface, WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB);
+    wined3d_resource_invalidate_location(&surface->resource, WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB);
     surface_force_reload(surface);
 }
 
@@ -674,7 +674,7 @@ static void surface_realize_palette(struct wined3d_surface *surface)
 
             /* We want to force a palette refresh, so mark the drawable as not being up to date */
             if (!surface_is_offscreen(surface))
-                surface_invalidate_location(surface, WINED3D_LOCATION_DRAWABLE);
+                wined3d_resource_invalidate_location(&surface->resource, WINED3D_LOCATION_DRAWABLE);
         }
         else
         {
@@ -684,7 +684,7 @@ static void surface_realize_palette(struct wined3d_surface *surface)
                 surface_prepare_system_memory(surface);
                 surface_load_location(surface, WINED3D_LOCATION_SYSMEM);
             }
-            surface_invalidate_location(surface, ~WINED3D_LOCATION_SYSMEM);
+            wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
         }
     }
 
@@ -730,7 +730,7 @@ static BYTE *surface_map(struct wined3d_surface *surface, const RECT *rect, DWOR
     }
 
     if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
-        surface_invalidate_location(surface, ~WINED3D_LOCATION_SYSMEM);
+        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
 
     if (surface->user_memory)
         return surface->user_memory;
@@ -1190,7 +1190,7 @@ static void surface_unload(struct wined3d_resource *resource)
     {
         surface_load_location(surface, WINED3D_LOCATION_SYSMEM);
     }
-    surface_invalidate_location(surface, ~WINED3D_LOCATION_SYSMEM);
+    wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
     surface->flags &= ~(SFLAG_ALLOCATED | SFLAG_SRGBALLOCATED);
 
     context = context_acquire(device, NULL);
@@ -1227,7 +1227,10 @@ static void surface_unload(struct wined3d_resource *resource)
 
 static void wined3d_surface_location_invalidated(struct wined3d_resource *resource, DWORD location)
 {
-    ERR("Not yet implemented.\n");
+    struct wined3d_surface *surface = surface_from_resource(resource);
+
+    if (location & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB))
+        wined3d_texture_set_dirty(surface->container);
 }
 
 static const struct wined3d_resource_ops surface_resource_ops =
@@ -2085,7 +2088,7 @@ HRESULT surface_upload_from_surface(struct wined3d_surface *dst_surface, const P
     context_release(context);
 
     wined3d_resource_validate_location(&dst_surface->resource, WINED3D_LOCATION_TEXTURE_RGB);
-    surface_invalidate_location(dst_surface, ~WINED3D_LOCATION_TEXTURE_RGB);
+    wined3d_resource_invalidate_location(&dst_surface->resource, ~WINED3D_LOCATION_TEXTURE_RGB);
 
     return WINED3D_OK;
 }
@@ -2300,7 +2303,7 @@ void surface_load(struct wined3d_surface *surface, BOOL srgb)
          * the surface. Make sure we have it. */
 
         surface_load_location(surface, WINED3D_LOCATION_SYSMEM);
-        surface_invalidate_location(surface, ~WINED3D_LOCATION_SYSMEM);
+        wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
         /* Switching color keying on / off may change the internal format. */
         if (ck_changed)
             surface_force_reload(surface);
@@ -2783,7 +2786,7 @@ HRESULT CDECL wined3d_surface_update_desc(struct wined3d_surface *surface,
     }
 
     wined3d_resource_validate_location(&surface->resource, WINED3D_LOCATION_SYSMEM);
-    surface_invalidate_location(surface, ~WINED3D_LOCATION_SYSMEM);
+    wined3d_resource_invalidate_location(&surface->resource, ~WINED3D_LOCATION_SYSMEM);
 
     return WINED3D_OK;
 }
@@ -3852,7 +3855,7 @@ static void fb_copy_to_texture_direct(struct wined3d_surface *dst_surface, struc
     /* The texture is now most up to date - If the surface is a render target
      * and has a drawable, this path is never entered. */
     wined3d_resource_validate_location(&dst_surface->resource, WINED3D_LOCATION_TEXTURE_RGB);
-    surface_invalidate_location(dst_surface, ~WINED3D_LOCATION_TEXTURE_RGB);
+    wined3d_resource_invalidate_location(&dst_surface->resource, ~WINED3D_LOCATION_TEXTURE_RGB);
 }
 
 /* Uses the hardware to stretch and flip the image */
@@ -3920,7 +3923,7 @@ static void fb_copy_to_texture_hwstretch(struct wined3d_surface *dst_surface, st
         checkGLcall("glEnable(texture_target)");
 
         /* For now invalidate the texture copy of the back buffer. Drawable and sysmem copy are untouched */
-        surface_invalidate_location(src_surface, WINED3D_LOCATION_TEXTURE_RGB);
+        wined3d_resource_invalidate_location(&src_surface->resource, WINED3D_LOCATION_TEXTURE_RGB);
     }
 
     /* Make sure that the top pixel is always above the bottom pixel, and keep a separate upside down flag
@@ -4125,7 +4128,7 @@ static void fb_copy_to_texture_hwstretch(struct wined3d_surface *dst_surface, st
     /* The texture is now most up to date - If the surface is a render target
      * and has a drawable, this path is never entered. */
     wined3d_resource_validate_location(&dst_surface->resource, WINED3D_LOCATION_TEXTURE_RGB);
-    surface_invalidate_location(dst_surface, ~WINED3D_LOCATION_TEXTURE_RGB);
+    wined3d_resource_invalidate_location(&dst_surface->resource, ~WINED3D_LOCATION_TEXTURE_RGB);
 }
 
 /* Front buffer coordinates are always full screen coordinates, but our GL
@@ -4415,7 +4418,7 @@ static HRESULT surface_blt_special(struct wined3d_surface *dst_surface, const RE
         src_surface->container->src_blt_color_key = old_blt_key;
 
         wined3d_resource_validate_location(&dst_surface->resource, dst_surface->draw_binding);
-        surface_invalidate_location(dst_surface, ~dst_surface->draw_binding);
+        wined3d_resource_invalidate_location(&dst_surface->resource, ~dst_surface->draw_binding);
 
         return WINED3D_OK;
     }
@@ -4656,18 +4659,6 @@ void surface_load_ds_location(struct wined3d_surface *surface, struct wined3d_co
     surface->resource.locations |= location;
     surface->ds_current_size.cx = surface->resource.width;
     surface->ds_current_size.cy = surface->resource.height;
-}
-
-void surface_invalidate_location(struct wined3d_surface *surface, DWORD location)
-{
-    TRACE("surface %p, location %s.\n", surface, wined3d_debug_location(location));
-
-    if (location & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB))
-        wined3d_texture_set_dirty(surface->container);
-    surface->resource.locations &= ~location;
-
-    if (!surface->resource.locations)
-        ERR("Surface %p does not have any up to date location.\n", surface);
 }
 
 static DWORD resource_access_from_location(DWORD location)
@@ -6019,7 +6010,7 @@ HRESULT CDECL wined3d_surface_blt(struct wined3d_surface *dst_surface, const REC
                         src_surface, src_surface->draw_binding, &src_rect,
                         dst_surface, dst_surface->draw_binding, &dst_rect);
                 wined3d_resource_validate_location(&dst_surface->resource, dst_surface->draw_binding);
-                surface_invalidate_location(dst_surface, ~dst_surface->draw_binding);
+                wined3d_resource_invalidate_location(&dst_surface->resource, ~dst_surface->draw_binding);
 
                 return WINED3D_OK;
             }
