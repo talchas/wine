@@ -81,8 +81,6 @@ enum wined3d_cs_op
     WINED3D_CS_OP_CREATE_VBO,
     WINED3D_CS_OP_RESOURCE_CLEANUP,
     WINED3D_CS_OP_BUFFER_CLEANUP,
-    WINED3D_CS_OP_VOLUME_CLEANUP,
-    WINED3D_CS_OP_SURFACE_CLEANUP,
     WINED3D_CS_OP_TEXTURE_CLEANUP,
     WINED3D_CS_OP_CREATE_DUMMY_TEXTURES,
     WINED3D_CS_OP_CREATE_SWAPCHAIN_CONTEXT,
@@ -473,12 +471,6 @@ struct wined3d_cs_buffer_cleanup
 {
     enum wined3d_cs_op opcode;
     struct wined3d_buffer *buffer;
-};
-
-struct wined3d_cs_volume_cleanup
-{
-    enum wined3d_cs_op opcode;
-    struct wined3d_volume *volume;
 };
 
 struct wined3d_cs_surface_cleanup
@@ -2406,46 +2398,6 @@ void wined3d_cs_emit_buffer_cleanup(struct wined3d_cs *cs, struct wined3d_buffer
     cs->ops->submit(cs, sizeof(*op));
 }
 
-static UINT wined3d_cs_exec_volume_cleanup(struct wined3d_cs *cs, const void *data)
-{
-    const struct wined3d_cs_volume_cleanup *op = data;
-
-    wined3d_volume_cleanup_cs(op->volume);
-
-    return sizeof(*op);
-}
-
-void wined3d_cs_emit_volume_cleanup(struct wined3d_cs *cs, struct wined3d_volume *volume)
-{
-    struct wined3d_cs_volume_cleanup *op;
-
-    op = cs->ops->require_space(cs, sizeof(*op));
-    op->opcode = WINED3D_CS_OP_VOLUME_CLEANUP;
-    op->volume = volume;
-
-    cs->ops->submit(cs, sizeof(*op));
-}
-
-static UINT wined3d_cs_exec_surface_cleanup(struct wined3d_cs *cs, const void *data)
-{
-    const struct wined3d_cs_surface_cleanup *op = data;
-
-    wined3d_surface_cleanup_cs(op->surface);
-
-    return sizeof(*op);
-}
-
-void wined3d_cs_emit_surface_cleanup(struct wined3d_cs *cs, struct wined3d_surface *surface)
-{
-    struct wined3d_cs_surface_cleanup *op;
-
-    op = cs->ops->require_space(cs, sizeof(*op));
-    op->opcode = WINED3D_CS_OP_SURFACE_CLEANUP;
-    op->surface = surface;
-
-    cs->ops->submit(cs, sizeof(*op));
-}
-
 static UINT wined3d_cs_exec_texture_cleanup(struct wined3d_cs *cs, const void *data)
 {
     const struct wined3d_cs_texture_cleanup *op = data;
@@ -2661,8 +2613,6 @@ static UINT (* const wined3d_cs_op_handlers[])(struct wined3d_cs *cs, const void
     /* WINED3D_CS_OP_CREATE_VBO             */ wined3d_cs_exec_create_vbo,
     /* WINED3D_CS_OP_RESOURCE_CLEANUP       */ wined3d_cs_exec_resource_cleanup,
     /* WINED3D_CS_OP_BUFFER_CLEANUP         */ wined3d_cs_exec_buffer_cleanup,
-    /* WINED3D_CS_OP_VOLUME_CLEANUP         */ wined3d_cs_exec_volume_cleanup,
-    /* WINED3D_CS_OP_SURFACE_CLEANUP        */ wined3d_cs_exec_surface_cleanup,
     /* WINED3D_CS_OP_TEXTURE_CLEANUP        */ wined3d_cs_exec_texture_cleanup,
     /* WINED3D_CS_OP_CREATE_DUMMY_TEXTURES  */ wined3d_cs_exec_create_dummy_textures,
     /* WINED3D_CS_OP_CREATE_SWAPCHAIN_CON...*/ wined3d_cs_exec_create_swapchain_context,

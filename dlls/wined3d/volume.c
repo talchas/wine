@@ -387,11 +387,6 @@ ULONG CDECL wined3d_volume_incref(struct wined3d_volume *volume)
     return refcount;
 }
 
-void wined3d_volume_cleanup_cs(struct wined3d_volume *volume)
-{
-    HeapFree(GetProcessHeap(), 0, volume);
-}
-
 ULONG CDECL wined3d_volume_decref(struct wined3d_volume *volume)
 {
     ULONG refcount;
@@ -410,10 +405,8 @@ ULONG CDECL wined3d_volume_decref(struct wined3d_volume *volume)
     {
         struct wined3d_device *device = volume->resource.device;
 
-        resource_cleanup(&volume->resource);
-
         volume->resource.parent_ops->wined3d_object_destroyed(volume->resource.parent);
-        wined3d_cs_emit_volume_cleanup(device->cs, volume);
+        HeapFree(GetProcessHeap(), 0, volume);
     }
 
     return refcount;

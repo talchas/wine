@@ -36,7 +36,7 @@ WINE_DECLARE_DEBUG_CHANNEL(d3d);
 
 #define MAXLOCKCOUNT 50 /* After this amount of locks do not free the sysmem copy. */
 
-void wined3d_surface_cleanup_cs(struct wined3d_surface *surface)
+static void wined3d_surface_cleanup_cs(struct wined3d_surface *surface)
 {
     if (surface->rb_multisample || surface->rb_resolved || !list_empty(&surface->renderbuffers))
     {
@@ -95,8 +95,7 @@ static void surface_cleanup(struct wined3d_surface *surface)
         overlay->overlay_dest = NULL;
     }
 
-    resource_cleanup(&surface->resource);
-    wined3d_cs_emit_surface_cleanup(surface->resource.device->cs, surface);
+    wined3d_surface_cleanup_cs(surface);
 }
 
 void surface_update_draw_binding(struct wined3d_surface *surface)

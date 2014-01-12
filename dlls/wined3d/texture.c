@@ -121,6 +121,17 @@ static void wined3d_texture_unload_gl_texture(struct wined3d_texture *texture)
 
 void wined3d_texture_cleanup_cs(struct wined3d_texture *texture)
 {
+    UINT sub_count = texture->level_count * texture->layer_count;
+    UINT i;
+
+    for (i = 0; i < sub_count; ++i)
+    {
+        struct wined3d_resource *sub_resource = texture->sub_resources[i];
+
+        if (sub_resource)
+            texture->texture_ops->texture_sub_resource_cleanup(sub_resource);
+    }
+
     wined3d_texture_unload_gl_texture(texture);
     HeapFree(GetProcessHeap(), 0, texture->sub_resources);
     HeapFree(GetProcessHeap(), 0, texture);
@@ -134,22 +145,16 @@ static void wined3d_texture_cleanup(struct wined3d_texture *texture)
 
     TRACE("texture %p.\n", texture);
 
-    /* Because sub_resource_cleanup interferes with GL resources */
-    if (wined3d_settings.cs_multithreaded)
-    {
-        FIXME("Waiting for cs.\n");
-        device->cs->ops->finish(device->cs);
-    }
+    resource_cleanup(&texture->resource);
 
     for (i = 0; i < sub_count; ++i)
     {
         struct wined3d_resource *sub_resource = texture->sub_resources[i];
 
         if (sub_resource)
-            texture->texture_ops->texture_sub_resource_cleanup(sub_resource);
+            resource_cleanup(sub_resource);
     }
 
-    resource_cleanup(&texture->resource);
     wined3d_cs_emit_texture_cleanup(device->cs, texture);
 }
 
