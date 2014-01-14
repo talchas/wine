@@ -2566,7 +2566,6 @@ struct wined3d_cs
     HANDLE event;
     BOOL waiting_for_event;
     CRITICAL_SECTION sleep_lock;
-    BOOL sleep_lock_entered;
     volatile LONG main_thread_wait;
 };
 

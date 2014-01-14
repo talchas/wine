@@ -2873,9 +2873,6 @@ static DWORD WINAPI wined3d_cs_run(void *thread_param)
 
     TRACE("Started.\n");
 
-    EnterCriticalSection(&cs->sleep_lock);
-    InterlockedExchange(&cs->sleep_lock_entered, 1);
-
     list_init(&cs->query_poll_list);
     cs->thread_id = GetCurrentThreadId();
     for (;;)
@@ -2928,7 +2925,6 @@ static DWORD WINAPI wined3d_cs_run(void *thread_param)
     }
 
 done:
-    LeaveCriticalSection(&cs->sleep_lock);
     TRACE("Stopped.\n");
     return 0;
 }
@@ -2955,15 +2951,17 @@ struct wined3d_cs *wined3d_cs_create(struct wined3d_device *device)
         cs->ops = &wined3d_cs_mt_ops;
 
         cs->event = CreateEventW(NULL, FALSE, FALSE, NULL);
+
         InitializeCriticalSection(&cs->sleep_lock);
+        EnterCriticalSection(&cs->sleep_lock);
 
         if (!(cs->thread = CreateThread(NULL, 0, wined3d_cs_run, cs, 0, NULL)))
         {
             ERR("Failed to create wined3d command stream thread.\n");
+            LeaveCriticalSection(&cs->sleep_lock);
             DeleteCriticalSection(&cs->sleep_lock);
             goto err;
         }
-        while(!InterlockedCompareExchange(&cs->sleep_lock_entered, 0, 1));
     }
 
     return cs;
@@ -2990,6 +2988,7 @@ void wined3d_cs_destroy(struct wined3d_cs *cs)
         if (ret != WAIT_OBJECT_0)
             ERR("Wait failed (%#x).\n", ret);
 
+        LeaveCriticalSection(&cs->sleep_lock);
         DeleteCriticalSection(&cs->sleep_lock);
 
         if (!CloseHandle(cs->event))
