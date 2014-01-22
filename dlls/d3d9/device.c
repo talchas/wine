@@ -3066,7 +3066,7 @@ static HRESULT WINAPI d3d9_device_ComposeRects(IDirect3DDevice9Ex *iface,
     return E_NOTIMPL;
 }
 
-static HRESULT WINAPI d3d9_device_PresentEx(IDirect3DDevice9Ex *iface,
+static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_device_PresentEx(IDirect3DDevice9Ex *iface,
         const RECT *src_rect, const RECT *dst_rect, HWND dst_window_override,
         const RGNDATA *dirty_region, DWORD flags)
 {
