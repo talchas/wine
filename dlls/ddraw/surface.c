@@ -6068,6 +6068,7 @@ HRESULT ddraw_surface_init(struct ddraw_surface *surface, struct ddraw *ddraw, s
     }
     else if (!(desc->dwFlags & DDSD_LPSURFACE))
     {
+        UINT row_pitch, slice_pitch;
         struct wined3d_resource *resource = wined3d_surface_get_resource(wined3d_surface);
         wined3d_resource_get_pitch(resource, &row_pitch, &slice_pitch);
         desc->dwFlags |= DDSD_PITCH;
@@ -6076,7 +6077,11 @@ HRESULT ddraw_surface_init(struct ddraw_surface *surface, struct ddraw *ddraw, s
 
     if (desc->dwFlags & DDSD_LPSURFACE)
     {
-        if (desc->u1.lPitch < wined3d_surface_get_pitch(wined3d_surface) || desc->u1.lPitch & 3)
+        UINT row_pitch, slice_pitch;
+        struct wined3d_resource *resource = wined3d_surface_get_resource(wined3d_surface);
+        wined3d_resource_get_pitch(resource, &row_pitch, &slice_pitch);
+
+        if (desc->u1.lPitch < row_pitch || desc->u1.lPitch & 3)
         {
             WARN("Invalid pitch %u specified.\n", desc->u1.lPitch);
             return DDERR_INVALIDPARAMS;
